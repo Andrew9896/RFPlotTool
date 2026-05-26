@@ -1,0 +1,1270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>RF Plot Tool</title>
+<style>
+  :root {
+    --bg-deep: #11142a;
+    --bg-mid: #1a1d2e;
+    --bg-card: #232742;
+    --bg-card-hover: #2b3050;
+    --accent: #6366f1;
+    --accent-hover: #818cf8;
+    --accent-glow: rgba(99, 102, 241, 0.45);
+    --success: #10b981;
+    --danger: #ef4444;
+    --text: #e6e8f5;
+    --text-dim: #9ca3c4;
+    --text-muted: #6b7099;
+    --border: rgba(255, 255, 255, 0.06);
+    --border-strong: rgba(255, 255, 255, 0.12);
+    --shadow-card: 0 10px 30px -8px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.3);
+    --shadow-inner: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+    color: var(--text);
+    background: radial-gradient(ellipse at top left, #2a2f55 0%, var(--bg-deep) 55%);
+    overflow: hidden;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+
+  header {
+    padding: 18px 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(8px);
+  }
+
+  header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: 0.5px;
+    background: linear-gradient(90deg, #c7d2fe, #a5b4fc);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 380px 1fr;
+    gap: 18px;
+    padding: 18px 22px;
+    overflow: hidden;
+  }
+
+  .panel {
+    background: linear-gradient(180deg, var(--bg-card) 0%, #1f2339 100%);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: var(--shadow-card), var(--shadow-inner);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .panel-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  .panel-header h2 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-dim);
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+  }
+
+  .panel-body {
+    padding: 16px 18px;
+    overflow-y: auto;
+    flex: 1;
+  }
+
+  .panel-body::-webkit-scrollbar { width: 8px; }
+  .panel-body::-webkit-scrollbar-track { background: transparent; }
+  .panel-body::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.08);
+    border-radius: 4px;
+  }
+  .panel-body::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.15); }
+
+  .form-row {
+    margin-bottom: 14px;
+  }
+
+  .form-row label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+
+  .input-group {
+    display: flex;
+    gap: 8px;
+  }
+
+  .mode-switch {
+    display: flex;
+    gap: 8px;
+  }
+
+  .mode-switch label {
+    margin: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: rgba(255,255,255,0.04);
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    text-transform: none;
+  }
+
+  .mode-switch input { accent-color: var(--accent); }
+
+  .csv-group-section {
+    display: none;
+  }
+
+  .csv-group-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .csv-group-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 8px;
+    align-items: center;
+  }
+
+  button.icon-btn {
+    min-width: 38px;
+    padding: 9px 10px;
+  }
+
+  input[type="text"] {
+    flex: 1;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 9px 12px;
+    color: var(--text);
+    font-size: 13px;
+    transition: border-color .15s, background .15s, box-shadow .15s;
+    width: 100%;
+  }
+
+  input[type="text"]:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+    background: rgba(0, 0, 0, 0.35);
+  }
+
+  button {
+    background: linear-gradient(180deg, #4f54d6 0%, #4338ca 100%);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: #fff;
+    padding: 9px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    transition: transform .1s, box-shadow .15s, filter .15s;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1);
+  }
+
+  button:hover { filter: brightness(1.12); }
+  button:active { transform: translateY(1px); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
+
+  button.ghost {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border-strong);
+  }
+
+  button.primary {
+    background: linear-gradient(180deg, #6366f1 0%, #4f46e5 100%);
+    box-shadow: 0 4px 14px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.15);
+    padding: 11px 18px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .group-labels-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .group-labels-list .form-row {
+    margin-bottom: 0;
+  }
+
+  .group-labels-list label {
+    margin-bottom: 4px;
+  }
+
+  .group-label-row {
+    display: grid;
+    grid-template-columns: 1fr 38px;
+    gap: 8px;
+    align-items: center;
+  }
+
+  input[type="color"].group-color {
+    width: 38px;
+    height: 38px;
+    padding: 2px;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.25);
+    cursor: pointer;
+  }
+
+  .highlight-sample-results {
+    margin-top: 8px;
+    max-height: 150px;
+    overflow-y: auto;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.18);
+  }
+
+  .highlight-sample-option {
+    display: grid;
+    grid-template-columns: 18px 1fr;
+    gap: 8px;
+    align-items: start;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 12px;
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .highlight-sample-option:last-child {
+    border-bottom: 0;
+  }
+
+  .highlight-sample-option:hover {
+    background: rgba(255,255,255,0.04);
+  }
+
+  .highlight-sample-option input {
+    margin-top: 2px;
+    accent-color: var(--accent);
+  }
+
+  .selected-highlight-header {
+    margin-top: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+
+  .selected-highlight-samples {
+    margin-top: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: 22px;
+  }
+
+  .sample-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    border: 1px solid rgba(250, 204, 21, 0.45);
+    border-radius: 999px;
+    padding: 4px 8px;
+    color: #fef3c7;
+    background: rgba(250, 204, 21, 0.12);
+    font-size: 11px;
+  }
+
+  .sample-chip button {
+    width: 16px;
+    height: 16px;
+    min-width: 16px;
+    padding: 0;
+    border-radius: 50%;
+    line-height: 1;
+    font-size: 12px;
+    box-shadow: none;
+  }
+
+  /* 天线选择 */
+  .toolbar {
+    display: flex;
+    gap: 6px;
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(0,0,0,0.15);
+    flex-shrink: 0;
+  }
+
+  .toolbar .stat {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .toolbar .stat strong {
+    color: var(--accent-hover);
+    margin: 0 4px;
+  }
+
+  .ant-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
+    padding: 16px 18px;
+  }
+
+  .ant-card {
+    position: relative;
+    background: linear-gradient(180deg, #2a2f4d 0%, #232742 100%);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    padding: 12px 14px;
+    cursor: pointer;
+    transition: transform .1s, border-color .15s, box-shadow .15s, background .15s;
+    user-select: none;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04);
+  }
+
+  .ant-card:hover {
+    transform: translateY(-1px);
+    border-color: rgba(129, 140, 248, 0.35);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.06);
+  }
+
+  .ant-card.checked {
+    background: linear-gradient(180deg, #4338ca 0%, #312e81 100%);
+    border-color: var(--accent);
+    box-shadow: 0 6px 18px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.15);
+  }
+
+  .ant-card .ant-name {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .ant-card .ant-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .ant-card.checked .ant-meta { color: rgba(255,255,255,0.7); }
+
+  .ant-card .check-mark {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 1.5px solid rgba(255,255,255,0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    color: transparent;
+    cursor: pointer;
+    transition: all .15s;
+  }
+
+  .ant-card.checked .check-mark {
+    background: #fff;
+    border-color: #fff;
+    color: var(--accent);
+  }
+
+  .empty-state {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+
+  .empty-state .icon {
+    font-size: 38px;
+    margin-bottom: 10px;
+    opacity: 0.5;
+  }
+
+  /* 底部状态栏 */
+  footer {
+    padding: 12px 22px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(0,0,0,0.2);
+    flex-shrink: 0;
+  }
+
+  .status {
+    font-size: 12px;
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .status .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    box-shadow: 0 0 8px transparent;
+  }
+
+  .status.ok .dot { background: var(--success); box-shadow: 0 0 8px var(--success); }
+  .status.error .dot { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+  .status.busy .dot { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1.2s infinite; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .footer-actions {
+    display: flex;
+    gap: 10px;
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    padding: 14px 18px;
+    box-shadow: var(--shadow-card);
+    max-width: 360px;
+    z-index: 1000;
+    transform: translateY(20px);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform .2s, opacity .2s;
+  }
+
+  .toast.show {
+    transform: translateY(0);
+    opacity: 1;
+  }
+
+  .toast.success { border-left: 3px solid var(--success); }
+  .toast.error { border-left: 3px solid var(--danger); }
+  .toast.info { border-left: 3px solid var(--accent); }
+
+  .toast-title {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .toast-msg {
+    font-size: 12px;
+    color: var(--text-dim);
+    white-space: pre-wrap;
+  }
+
+  .preview-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 900;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 28px;
+    background: rgba(4, 6, 18, 0.72);
+    backdrop-filter: blur(6px);
+  }
+
+  .preview-modal.show {
+    display: flex;
+  }
+
+  .preview-dialog {
+    width: min(1500px, calc(100vw - 56px));
+    height: min(920px, calc(100vh - 56px));
+    background: #171a2d;
+    border: 1px solid var(--border-strong);
+    border-radius: 14px;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.65);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .preview-dialog-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-shrink: 0;
+  }
+
+  .preview-dialog-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-dim);
+  }
+
+  .preview-dialog-name {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .preview-close {
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 20px;
+    line-height: 1;
+  }
+
+  .preview-dialog-body {
+    flex: 1;
+    min-height: 0;
+    background: rgba(0,0,0,0.22);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+  }
+
+  .preview-dialog-body img {
+    max-width: 100%;
+    max-height: 100%;
+    display: none;
+    object-fit: contain;
+    background: #fff;
+  }
+
+  .preview-message {
+    color: var(--text-muted);
+    font-size: 14px;
+    text-align: center;
+    padding: 0 24px;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>RF Plot Tool</h1>
+    </div>
+  </header>
+
+  <main>
+    <!-- 左侧配置 -->
+    <section class="panel">
+      <div class="panel-header">
+        <h2>配置</h2>
+      </div>
+      <div class="panel-body">
+        <div class="form-row">
+          <label>分组模式</label>
+          <div class="mode-switch">
+            <label><input type="radio" name="group_mode" value="default" checked /> 默认分组</label>
+            <label><input type="radio" name="group_mode" value="csv_group" /> CSV 分组</label>
+          </div>
+        </div>
+
+        <div class="form-row" id="default_csv_row">
+          <label>CSV 文件</label>
+          <div class="input-group">
+            <input type="text" id="csv_path" placeholder="选择 CSV 文件…" />
+            <button class="ghost" id="btn_pick_csv">浏览</button>
+          </div>
+        </div>
+
+        <div class="form-row csv-group-section" id="csv_group_section">
+          <label>CSV 分组文件</label>
+          <div class="csv-group-rows" id="csv_group_rows"></div>
+          <div style="margin-top:8px;">
+            <button class="ghost" id="btn_add_csv_group">添加 CSV</button>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <label>输出目录</label>
+          <div class="input-group">
+            <input type="text" id="output_dir" />
+            <button class="ghost" id="btn_pick_dir">浏览</button>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <label>Summary 标题</label>
+          <input type="text" id="overview_title" value="S11 Comparison" />
+        </div>
+
+        <div class="form-row">
+          <label>Upper Limit 标签</label>
+          <input type="text" id="upper_limit" value="Upper Limit" />
+        </div>
+
+        <div class="form-row">
+          <label>Lower Limit 标签</label>
+          <input type="text" id="lower_limit" value="Lower Limit" />
+        </div>
+
+        <div class="form-row">
+          <label>问题样本高亮</label>
+          <input type="text" id="highlight_sample_search" placeholder="输入 SN、Row 或关键字搜索…" />
+          <div id="highlight_sample_results" class="highlight-sample-results"></div>
+          <div class="selected-highlight-header">
+            <span>已选高亮样本</span>
+            <button class="ghost" id="btn_clear_highlight_samples" type="button">清空</button>
+          </div>
+          <div id="selected_highlight_samples" class="selected-highlight-samples"></div>
+        </div>
+
+        <div class="form-row">
+          <label>样本组标签 (按 CSV 中 segment 顺序)</label>
+          <div id="group_labels" class="group-labels-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 右侧天线选择 -->
+    <section class="panel">
+      <div class="panel-header">
+        <h2>选择天线</h2>
+        <div style="display:flex; gap:6px;">
+          <button class="ghost" id="btn_check_all">全选</button>
+          <button class="ghost" id="btn_uncheck_all">全不选</button>
+          <button class="ghost" id="btn_rescan">重新扫描</button>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div class="stat">
+          已检测 <strong id="stat_total">0</strong> 个天线 · 已选 <strong id="stat_selected">0</strong> · Segment 数 <strong id="stat_segments">0</strong>
+        </div>
+      </div>
+      <div class="panel-body" id="ant_container">
+        <div class="empty-state">
+          <div class="icon">📡</div>
+          <div>选择 CSV 后将列出所有可绘制的天线</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="status" id="status">
+      <span class="dot"></span>
+      <span class="text">Ready</span>
+    </div>
+    <div class="footer-actions">
+      <button class="ghost" id="btn_check_update">检查更新</button>
+      <button class="ghost" id="btn_open_dir">打开输出目录</button>
+      <button class="primary" id="btn_generate">生成图表</button>
+    </div>
+  </footer>
+
+  <div class="toast" id="toast">
+    <div class="toast-title" id="toast_title"></div>
+    <div class="toast-msg" id="toast_msg"></div>
+  </div>
+
+  <div class="preview-modal" id="preview_modal">
+    <div class="preview-dialog" role="dialog" aria-modal="true" aria-labelledby="preview_title">
+      <div class="preview-dialog-header">
+        <div>
+          <div class="preview-dialog-title" id="preview_title">图形预览</div>
+          <div class="preview-dialog-name" id="preview_name"></div>
+        </div>
+        <button class="ghost preview-close" id="btn_close_preview" title="关闭预览">×</button>
+      </div>
+      <div class="preview-dialog-body">
+        <img id="preview_image" alt="天线图形预览" />
+        <div class="preview-message" id="preview_message">点击天线卡片预览图形</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const api = () => window.pywebview.api;
+  const $ = (id) => document.getElementById(id);
+  const DEFAULT_GROUP_COLORS = [
+    "#15803d", "#dc2626", "#1d4ed8", "#c2410c", "#7e22ce",
+    "#0e7490", "#be185d", "#a16207", "#374151"
+  ];
+
+  const state = {
+    antennas: [],         // [{key, s_param, ant_name, sub_id, band_count}]
+    selected: new Set(),
+    segmentCount: 0,
+    lastOutputDir: "",
+    previewRequestId: 0,
+    samples: [],
+    selectedHighlightSamples: new Set(),
+  };
+
+  // ---- 状态栏 ----
+  function setStatus(text, kind = "") {
+    const el = $("status");
+    el.className = "status " + kind;
+    el.querySelector(".text").textContent = text;
+  }
+
+  function showToast(title, msg, kind = "info") {
+    const t = $("toast");
+    $("toast_title").textContent = title;
+    $("toast_msg").textContent = msg;
+    t.className = "toast " + kind + " show";
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.classList.remove("show"), 4500);
+  }
+
+  function getGroupMode() {
+    return document.querySelector('input[name="group_mode"]:checked')?.value || "default";
+  }
+
+  function fileStem(path) {
+    const name = path.split(/[\\/]/).pop() || "";
+    return name.replace(/\.csv$/i, "") || "Group";
+  }
+
+  function renderCsvGroupRows(paths = ["", ""]) {
+    const box = $("csv_group_rows");
+    box.innerHTML = "";
+    paths.forEach((path) => addCsvGroupRow(path));
+  }
+
+  function addCsvGroupRow(path = "") {
+    const row = document.createElement("div");
+    row.className = "csv-group-row";
+    row.innerHTML = `
+      <input type="text" class="csv-group-path" placeholder="选择 CSV 文件…" />
+      <button class="ghost btn-pick-csv-group">浏览</button>
+      <button class="ghost icon-btn btn-remove-csv-group">删除</button>
+    `;
+    row.querySelector(".csv-group-path").value = path;
+    $("csv_group_rows").appendChild(row);
+  }
+
+  function getCsvPaths() {
+    if (getGroupMode() === "csv_group") {
+      return Array.from(document.querySelectorAll(".csv-group-path"))
+        .map((input) => input.value.trim())
+        .filter(Boolean);
+    }
+    const path = $("csv_path").value.trim();
+    return path ? [path] : [];
+  }
+
+  function buildDataPayload(extra = {}) {
+    return {
+      group_mode: getGroupMode(),
+      csv_path: $("csv_path").value.trim(),
+      csv_paths: getCsvPaths(),
+      ...extra,
+    };
+  }
+
+  function updateGroupModeUI() {
+    const csvGroup = getGroupMode() === "csv_group";
+    $("default_csv_row").style.display = csvGroup ? "none" : "";
+    $("csv_group_section").style.display = csvGroup ? "block" : "none";
+    if (csvGroup && $("csv_group_rows").children.length === 0) renderCsvGroupRows();
+  }
+
+  // ---- Group label 表单 ----
+  function renderGroupLabels(count, defaultLabels = []) {
+    const box = $("group_labels");
+    const existingLabels = Array.from(box.querySelectorAll('input[type="text"]')).map((i) => i.value);
+    const existingColors = Array.from(box.querySelectorAll('input[type="color"]')).map((i) => i.value);
+    box.innerHTML = "";
+    for (let i = 0; i < count; i++) {
+      const wrap = document.createElement("div");
+      wrap.className = "form-row";
+      const label = document.createElement("label");
+      label.textContent = `Group ${i + 1}`;
+      const row = document.createElement("div");
+      row.className = "group-label-row";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = existingLabels[i] || defaultLabels[i] || `Group ${i + 1}`;
+      const color = document.createElement("input");
+      color.type = "color";
+      color.className = "group-color";
+      color.value = existingColors[i] || DEFAULT_GROUP_COLORS[i % DEFAULT_GROUP_COLORS.length];
+      row.appendChild(input);
+      row.appendChild(color);
+      wrap.appendChild(label);
+      wrap.appendChild(row);
+      box.appendChild(wrap);
+    }
+  }
+
+  function getGroupLabels() {
+    return Array.from($("group_labels").querySelectorAll('input[type="text"]')).map((i) => i.value);
+  }
+
+  function getGroupColors() {
+    return Array.from($("group_labels").querySelectorAll('input[type="color"]')).map((i) => i.value);
+  }
+
+  function renderLegacySampleOptions(samples = []) {
+    state.samples = samples;
+    const select = $("highlight_sample");
+    const selected = select.value;
+    select.innerHTML = '<option value="">不高亮单个样本</option>';
+    samples.forEach((sample) => {
+      const option = document.createElement("option");
+      option.value = sample.id;
+      option.textContent = sample.label;
+      select.appendChild(option);
+    });
+    if (samples.some((sample) => sample.id === selected)) {
+      select.value = selected;
+    }
+  }
+
+  function sampleMatchesQuery(sample, query) {
+    if (!query) return true;
+    const haystack = [
+      sample.label,
+      sample.serial_number,
+      `group ${sample.group_index}`,
+      `row ${sample.row_index}`,
+      String(sample.group_index),
+      String(sample.row_index),
+    ].join(" ").toLowerCase();
+    return haystack.includes(query.toLowerCase());
+  }
+
+  function getHighlightSampleIds() {
+    return Array.from(state.selectedHighlightSamples);
+  }
+
+  function renderSelectedHighlightSamples() {
+    const box = $("selected_highlight_samples");
+    box.innerHTML = "";
+    const selectedSamples = state.samples.filter((sample) => state.selectedHighlightSamples.has(sample.id));
+    selectedSamples.forEach((sample) => {
+      const chip = document.createElement("span");
+      chip.className = "sample-chip";
+      const text = document.createElement("span");
+      text.textContent = sample.label;
+      const remove = document.createElement("button");
+      remove.className = "ghost";
+      remove.type = "button";
+      remove.textContent = "×";
+      remove.title = "移除高亮样本";
+      remove.addEventListener("click", () => {
+        state.selectedHighlightSamples.delete(sample.id);
+        renderSelectedHighlightSamples();
+        renderSampleSearchResults();
+      });
+      chip.appendChild(text);
+      chip.appendChild(remove);
+      box.appendChild(chip);
+    });
+  }
+
+  function renderSampleSearchResults() {
+    const box = $("highlight_sample_results");
+    const query = $("highlight_sample_search").value.trim();
+    const matches = state.samples.filter((sample) => sampleMatchesQuery(sample, query)).slice(0, 50);
+    box.innerHTML = "";
+    if (state.samples.length === 0) {
+      box.innerHTML = '<div class="empty-state">扫描 CSV 后可选择问题样本</div>';
+      return;
+    }
+    if (matches.length === 0) {
+      box.innerHTML = '<div class="empty-state">没有匹配的样本</div>';
+      return;
+    }
+    matches.forEach((sample) => {
+      const label = document.createElement("label");
+      label.className = "highlight-sample-option";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = state.selectedHighlightSamples.has(sample.id);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) state.selectedHighlightSamples.add(sample.id);
+        else state.selectedHighlightSamples.delete(sample.id);
+        renderSelectedHighlightSamples();
+      });
+      const text = document.createElement("span");
+      text.textContent = sample.label;
+      label.appendChild(checkbox);
+      label.appendChild(text);
+      box.appendChild(label);
+    });
+  }
+
+  function renderSampleOptions(samples = []) {
+    state.samples = samples;
+    state.selectedHighlightSamples = new Set(
+      Array.from(state.selectedHighlightSamples).filter((id) => samples.some((sample) => sample.id === id))
+    );
+    renderSampleSearchResults();
+    renderSelectedHighlightSamples();
+  }
+
+  $("highlight_sample_search").addEventListener("input", renderSampleSearchResults);
+  $("btn_clear_highlight_samples").addEventListener("click", () => {
+    state.selectedHighlightSamples.clear();
+    renderSelectedHighlightSamples();
+    renderSampleSearchResults();
+  });
+
+  function setPreviewMessage(text, kind = "") {
+    $("preview_name").textContent = kind === "error" ? "预览失败" : "";
+    $("preview_image").style.display = "none";
+    $("preview_image").removeAttribute("src");
+    $("preview_message").style.display = "block";
+    $("preview_message").textContent = text;
+  }
+
+  function openPreviewModal() {
+    $("preview_modal").classList.add("show");
+  }
+
+  function closePreviewModal() {
+    state.previewRequestId += 1;
+    $("preview_modal").classList.remove("show");
+  }
+
+  function toggleSelection(key, card) {
+    if (state.selected.has(key)) state.selected.delete(key);
+    else state.selected.add(key);
+    card.classList.toggle("checked", state.selected.has(key));
+    updateStats();
+  }
+
+  async function previewAntenna(key) {
+    if (getCsvPaths().length === 0) {
+      setPreviewMessage("请选择 CSV 文件", "error");
+      return;
+    }
+
+    const requestId = ++state.previewRequestId;
+    openPreviewModal();
+    $("preview_name").textContent = key;
+    $("preview_image").style.display = "none";
+    $("preview_message").style.display = "block";
+    $("preview_message").textContent = "预览生成中…";
+    setStatus("预览生成中…", "busy");
+
+    const payload = buildDataPayload({
+      antenna_key: key,
+      overview_title: $("overview_title").value.trim(),
+      upper_limit: $("upper_limit").value.trim(),
+      lower_limit: $("lower_limit").value.trim(),
+      group_labels: getGroupLabels(),
+      group_colors: getGroupColors(),
+      highlight_sample_ids: getHighlightSampleIds(),
+    });
+
+    try {
+      const res = await api().preview(payload);
+      if (requestId !== state.previewRequestId) return;
+      if (!res.ok) {
+        setPreviewMessage(res.error, "error");
+        setStatus("预览失败: " + res.error, "error");
+        return;
+      }
+      $("preview_name").textContent = res.antenna;
+      $("preview_message").style.display = "none";
+      $("preview_image").src = res.image;
+      $("preview_image").style.display = "block";
+      setStatus("已预览 " + res.antenna, "ok");
+    } catch (err) {
+      if (requestId !== state.previewRequestId) return;
+      const message = String(err.message || err);
+      setPreviewMessage(message, "error");
+      setStatus("预览异常: " + message, "error");
+    }
+  }
+
+  // ---- 天线渲染 ----
+  function renderAntennas() {
+    const c = $("ant_container");
+    c.innerHTML = "";
+    if (state.antennas.length === 0) {
+      c.innerHTML = `
+        <div class="empty-state">
+          <div class="icon">📡</div>
+          <div>选择 CSV 后将列出所有可绘制的天线</div>
+        </div>`;
+      return;
+    }
+
+    const grid = document.createElement("div");
+    grid.className = "ant-grid";
+    state.antennas.forEach((a) => {
+      const card = document.createElement("div");
+      card.className = "ant-card" + (state.selected.has(a.key) ? " checked" : "");
+      card.dataset.key = a.key;
+      card.innerHTML = `
+        <div class="ant-name">${a.key}</div>
+        <div class="ant-meta">${a.band_count} bands</div>
+        <div class="check-mark">✓</div>
+      `;
+      const checkMark = card.querySelector(".check-mark");
+      checkMark.addEventListener("click", (event) => {
+        event.stopPropagation();
+        toggleSelection(a.key, card);
+      });
+      card.addEventListener("click", () => previewAntenna(a.key));
+      grid.appendChild(card);
+    });
+    c.appendChild(grid);
+  }
+
+  function updateStats() {
+    $("stat_total").textContent = state.antennas.length;
+    $("stat_selected").textContent = state.selected.size;
+    $("stat_segments").textContent = state.segmentCount;
+  }
+
+  // ---- CSV 扫描 ----
+  async function scanCsv() {
+    const csvPaths = getCsvPaths();
+    if (csvPaths.length === 0) {
+      state.antennas = [];
+      state.selected.clear();
+      state.segmentCount = 0;
+      state.samples = [];
+      state.selectedHighlightSamples.clear();
+      renderAntennas();
+      renderGroupLabels(0);
+      renderSampleOptions([]);
+      updateStats();
+      setPreviewMessage("点击天线卡片预览图形");
+      setStatus("请选择 CSV 文件", "");
+      return;
+    }
+    setStatus("扫描中…", "busy");
+    const res = await api().scan_csv(buildDataPayload());
+    if (!res.ok) {
+      setStatus("扫描失败: " + res.error, "error");
+      showToast("扫描失败", res.error, "error");
+      return;
+    }
+    state.antennas = res.antennas;
+    state.segmentCount = res.segment_count;
+    state.selected = new Set(res.antennas.map((a) => a.key));
+    state.samples = res.samples || [];
+    renderAntennas();
+    const groupDefaults = getGroupMode() === "csv_group" ? csvPaths.map(fileStem) : [];
+    renderGroupLabels(res.segment_count, groupDefaults);
+    renderSampleOptions(state.samples);
+    updateStats();
+    setPreviewMessage("点击天线卡片预览图形");
+    setStatus(`检测到 ${res.antennas.length} 个天线 · ${res.segment_count} 个 segment`, "ok");
+  }
+
+  // ---- 事件 ----
+  $("btn_pick_csv").addEventListener("click", async () => {
+    try {
+      const res = await api().pick_csv();
+      if (res.ok && res.path) {
+        $("csv_path").value = res.path;
+        await scanCsv();
+      }
+    } catch (err) {
+      showToast("文件选择失败", String(err.message || err), "error");
+    }
+  });
+
+  $("btn_pick_dir").addEventListener("click", async () => {
+    try {
+      const res = await api().pick_dir();
+      if (res.ok && res.path) $("output_dir").value = res.path;
+    } catch (err) {
+      showToast("目录选择失败", String(err.message || err), "error");
+    }
+  });
+
+  $("btn_rescan").addEventListener("click", scanCsv);
+
+  $("btn_check_all").addEventListener("click", () => {
+    state.selected = new Set(state.antennas.map((a) => a.key));
+    renderAntennas();
+    updateStats();
+  });
+
+  $("btn_uncheck_all").addEventListener("click", () => {
+    state.selected.clear();
+    renderAntennas();
+    updateStats();
+  });
+
+  $("btn_check_update").addEventListener("click", async () => {
+    const button = $("btn_check_update");
+    button.disabled = true;
+    setStatus("检查更新中…", "busy");
+    try {
+      const res = await api().check_update();
+      if (!res.ok) {
+        setStatus("检查更新失败: " + res.error, "error");
+        showToast("检查更新失败", res.error, "error");
+        return;
+      }
+      if (!res.has_update) {
+        setStatus(res.message || "当前已是最新版本", "ok");
+        showToast("无需更新", res.message || "当前已是最新版本", "success");
+        return;
+      }
+      setStatus(res.message || "更新已开始", "busy");
+      showToast("发现新版本 " + res.version, res.message || "更新已开始", "success");
+    } catch (err) {
+      setStatus("检查更新异常: " + (err.message || err), "error");
+      showToast("检查更新异常", String(err.message || err), "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  $("btn_open_dir").addEventListener("click", async () => {
+    const dir = state.lastOutputDir || $("output_dir").value.trim();
+    if (!dir) return;
+    await api().open_dir(dir);
+  });
+
+  $("csv_group_rows").addEventListener("click", async (event) => {
+    const pickButton = event.target.closest(".btn-pick-csv-group");
+    const removeButton = event.target.closest(".btn-remove-csv-group");
+    if (pickButton) {
+      const row = pickButton.closest(".csv-group-row");
+      try {
+        const res = await api().pick_csv();
+        if (res.ok && res.path) {
+          row.querySelector(".csv-group-path").value = res.path;
+          await scanCsv();
+        }
+      } catch (err) {
+        showToast("文件选择失败", String(err.message || err), "error");
+      }
+    }
+    if (removeButton) {
+      removeButton.closest(".csv-group-row").remove();
+      await scanCsv();
+    }
+  });
+
+  $("btn_add_csv_group").addEventListener("click", () => addCsvGroupRow());
+
+  $("btn_close_preview").addEventListener("click", closePreviewModal);
+  $("preview_modal").addEventListener("click", (event) => {
+    if (event.target === $("preview_modal")) closePreviewModal();
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && $("preview_modal").classList.contains("show")) {
+      closePreviewModal();
+    }
+  });
+
+  $("btn_generate").addEventListener("click", async () => {
+    if (state.selected.size === 0) {
+      showToast("提示", "请至少勾选一个天线", "error");
+      return;
+    }
+    setStatus("生成中…", "busy");
+    $("btn_generate").disabled = true;
+    const payload = buildDataPayload({
+      output_dir: $("output_dir").value.trim(),
+      overview_title: $("overview_title").value.trim(),
+      upper_limit: $("upper_limit").value.trim(),
+      lower_limit: $("lower_limit").value.trim(),
+      group_labels: getGroupLabels(),
+      group_colors: getGroupColors(),
+      selected_antennas: Array.from(state.selected),
+    });
+    try {
+      const res = await api().generate(payload);
+      if (!res.ok) {
+        setStatus("生成失败: " + res.error, "error");
+        showToast("生成失败", res.error, "error");
+      } else {
+        state.lastOutputDir = res.output_dir;
+        setStatus(`已生成 ${res.files.length} 个文件 · ${res.output_dir}`, "ok");
+        showToast("生成完成", res.files.join("\n"), "success");
+      }
+    } catch (err) {
+      setStatus("生成异常: " + (err.message || err), "error");
+      showToast("生成异常", String(err.message || err), "error");
+    } finally {
+      $("btn_generate").disabled = false;
+    }
+  });
+
+  // ---- 启动 ----
+  function init() {
+    renderCsvGroupRows();
+    document.querySelectorAll('input[name="group_mode"]').forEach((input) => {
+      input.addEventListener("change", () => {
+        updateGroupModeUI();
+        scanCsv();
+      });
+    });
+    updateGroupModeUI();
+    api().get_defaults().then((res) => {
+      if (!res.ok) return;
+      $("output_dir").value = res.output_dir;
+    });
+    setStatus("请选择 CSV 文件", "");
+  }
+
+  // pywebview 就绪事件
+  if (window.pywebview && window.pywebview.api) init();
+  else window.addEventListener("pywebviewready", init);
+</script>
+</body>
+</html>
