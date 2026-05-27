@@ -1,12 +1,12 @@
-{
-    "version":  "2.0.3",
-    "app_version":  "0.0.3",
-    "display_version":  "V0.0.3",
+﻿{
+    "version":  "0.0.4",
+    "app_version":  "0.0.4",
+    "display_version":  "V0.0.4",
     "epoch":  1,
-    "url":  "https://gitee.com/andrewstephy/rfplot-tool/releases/download/v2.0.3/RFPlotTool.exe",
+    "url":  "https://gitee.com/andrewstephy/rfplot-tool/releases/download/v0.0.4/RFPlotTool.exe",
     "mirrors":  [
-                    "https://github.com/Andrew9896/RFPlotTool/releases/download/v2.0.3/RFPlotTool.exe"
+                    "https://github.com/Andrew9896/RFPlotTool/releases/download/v0.0.4/RFPlotTool.exe"
                 ],
-    "sha256":  "b8f5651e819f46a291d0ef2665a6c5d2401082d1122da0a262953b5f6152cde5",
-    "notes":  "V0.0.3：启动时提示可用更新；支持 Gitee 优先、GitHub 备用下载；主程序内嵌更新器。"
+    "sha256":  "7bcb94220e73b2dddb86df2a1ddd51749842e057f667c61b58e0e4609dcd32c3",
+    "notes":  "V0.0.4：主窗口点击关闭时增加退出确认，避免预览操作时误关程序。"
 }
