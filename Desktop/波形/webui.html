@@ -596,6 +596,68 @@
     text-align: center;
     padding: 0 24px;
   }
+
+  .update-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 950;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(4, 6, 18, 0.62);
+    backdrop-filter: blur(5px);
+  }
+
+  .update-modal.show {
+    display: flex;
+  }
+
+  .update-dialog {
+    width: min(460px, calc(100vw - 48px));
+    background: #171a2d;
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    box-shadow: 0 24px 70px rgba(0,0,0,0.58);
+    overflow: hidden;
+  }
+
+  .update-dialog-header {
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .update-dialog-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+  }
+
+  .update-dialog-body {
+    padding: 16px 18px;
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  .update-notes {
+    margin-top: 10px;
+    max-height: 150px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    background: rgba(0,0,0,0.18);
+    white-space: pre-wrap;
+  }
+
+  .update-dialog-actions {
+    padding: 14px 18px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+  }
 </style>
 </head>
 <body>
@@ -734,6 +796,22 @@
     </div>
   </div>
 
+  <div class="update-modal" id="update_modal">
+    <div class="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update_title">
+      <div class="update-dialog-header">
+        <div class="update-dialog-title" id="update_title">发现新版本</div>
+      </div>
+      <div class="update-dialog-body">
+        <div id="update_version"></div>
+        <div class="update-notes" id="update_notes"></div>
+      </div>
+      <div class="update-dialog-actions">
+        <button class="ghost" id="btn_skip_update" type="button">暂不更新</button>
+        <button class="primary" id="btn_update_now" type="button">立即更新</button>
+      </div>
+    </div>
+  </div>
+
 <script>
   const api = () => window.pywebview.api;
   const $ = (id) => document.getElementById(id);
@@ -750,6 +828,8 @@
     previewRequestId: 0,
     samples: [],
     selectedHighlightSamples: new Set(),
+    pendingUpdate: null,
+    startupUpdateChecked: false,
   };
 
   // ---- 状态栏 ----
@@ -766,6 +846,54 @@
     t.className = "toast " + kind + " show";
     clearTimeout(t._timer);
     t._timer = setTimeout(() => t.classList.remove("show"), 4500);
+  }
+
+  function showUpdateModal(updateInfo) {
+    state.pendingUpdate = updateInfo;
+    const current = updateInfo.current_display_version || updateInfo.current_version || "";
+    const latest = updateInfo.display_version || updateInfo.version || "";
+    $("update_version").textContent = `当前版本 ${current}，最新版本 ${latest}`;
+    $("update_notes").textContent = updateInfo.notes || "暂无更新说明";
+    $("update_modal").classList.add("show");
+  }
+
+  function closeUpdateModal() {
+    state.pendingUpdate = null;
+    $("update_modal").classList.remove("show");
+  }
+
+  async function checkForUpdate({ silent = false } = {}) {
+    if (!silent) setStatus("检查更新中…", "busy");
+    try {
+      const res = await api().check_update({ install: false });
+      if (!res.ok) {
+        if (!silent) {
+          setStatus("检查更新失败: " + res.error, "error");
+          showToast("检查更新失败", res.error, "error");
+        }
+        return;
+      }
+      if (!res.has_update) {
+        if (!silent) {
+          setStatus(res.message || "当前已是最新版本", "ok");
+          showToast("无需更新", res.message || "当前已是最新版本", "success");
+        }
+        return;
+      }
+      setStatus("发现新版本 " + (res.display_version || res.version), "ok");
+      showUpdateModal(res);
+    } catch (err) {
+      if (!silent) {
+        setStatus("检查更新异常: " + (err.message || err), "error");
+        showToast("检查更新异常", String(err.message || err), "error");
+      }
+    }
+  }
+
+  function scheduleStartupUpdateCheck() {
+    if (state.startupUpdateChecked) return;
+    state.startupUpdateChecked = true;
+    window.setTimeout(() => checkForUpdate({ silent: true }), 1200);
   }
 
   function getGroupMode() {
@@ -1149,25 +1277,31 @@
   $("btn_check_update").addEventListener("click", async () => {
     const button = $("btn_check_update");
     button.disabled = true;
-    setStatus("检查更新中…", "busy");
     try {
-      const res = await api().check_update();
+      await checkForUpdate({ silent: false });
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  $("btn_skip_update").addEventListener("click", closeUpdateModal);
+  $("btn_update_now").addEventListener("click", async () => {
+    const button = $("btn_update_now");
+    button.disabled = true;
+    setStatus("更新下载中…", "busy");
+    try {
+      const res = await api().install_update(state.pendingUpdate || {});
       if (!res.ok) {
-        setStatus("检查更新失败: " + res.error, "error");
-        showToast("检查更新失败", res.error, "error");
-        return;
-      }
-      if (!res.has_update) {
-        setStatus(res.message || "当前已是最新版本", "ok");
-        showToast("无需更新", res.message || "当前已是最新版本", "success");
+        setStatus("更新失败: " + res.error, "error");
+        showToast("更新失败", res.error, "error");
+        button.disabled = false;
         return;
       }
       setStatus(res.message || "更新已开始", "busy");
-      showToast("发现新版本 " + res.version, res.message || "更新已开始", "success");
+      showToast("正在更新", res.message || "程序将退出并安装新版", "success");
     } catch (err) {
-      setStatus("检查更新异常: " + (err.message || err), "error");
-      showToast("检查更新异常", String(err.message || err), "error");
-    } finally {
+      setStatus("更新异常: " + (err.message || err), "error");
+      showToast("更新异常", String(err.message || err), "error");
       button.disabled = false;
     }
   });
@@ -1261,6 +1395,7 @@
       $("output_dir").value = res.output_dir;
     });
     setStatus("请选择 CSV 文件", "");
+    scheduleStartupUpdateCheck();
   }
 
   // pywebview 就绪事件

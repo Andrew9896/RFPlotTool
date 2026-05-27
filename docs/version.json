@@ -1,6 +1,12 @@
 ﻿{
-    "version":  "2.0.2",
-    "url":  "https://github.com/Andrew9896/RFPlotTool/releases/download/v2.0.2/RFPlotTool.exe",
-    "sha256":  "de77077237faa36d29728b05b1c3b08963e64c0914b56c821ad37a6938a93b2b",
-    "notes":  "支持生成图表同步问题样本高亮"
+    "version":  "2.0.3",
+    "app_version":  "0.0.3",
+    "display_version":  "V0.0.3",
+    "epoch":  1,
+    "url":  "https://gitee.com/andrewstephy/rfplot-tool/releases/download/v2.0.3/RFPlotTool.exe",
+    "mirrors":  [
+                    "https://github.com/Andrew9896/RFPlotTool/releases/download/v2.0.3/RFPlotTool.exe"
+                ],
+    "sha256":  "b8f5651e819f46a291d0ef2665a6c5d2401082d1122da0a262953b5f6152cde5",
+    "notes":  "V0.0.3：启动时提示可用更新；支持 Gitee 优先、GitHub 备用下载；主程序内嵌更新器。"
 }
