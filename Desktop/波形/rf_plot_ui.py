@@ -36,7 +36,7 @@ from openpyxl.drawing.image import Image as ExcelImage
 
 CSV_PATTERN = "*.csv"
 DEFAULT_OUTPUT_SUBDIR = "output"
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.2"
 DEFAULT_UPDATE_MANIFEST_URL = "https://Andrew9896.github.io/RFPlotTool/version.json"
 UPDATE_MANIFEST_URL = os.environ.get("RF_PLOT_TOOL_UPDATE_URL", DEFAULT_UPDATE_MANIFEST_URL).strip()
 UPDATER_EXE_NAME = "updater.exe"

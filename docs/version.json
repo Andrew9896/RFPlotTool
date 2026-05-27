@@ -1,6 +1,6 @@
-{
-  "version": "2.0.1",
-  "url": "https://github.com/Andrew9896/RFPlotTool/releases/download/v2.0.1/RFPlotTool.exe",
-  "sha256": "d44f0b4f0c4d505fc7c7a982f72fbf05dc8a3eb18e54c5b1512beb505eda5920",
-  "notes": "支持预览图多问题样本搜索高亮"
+﻿{
+    "version":  "2.0.2",
+    "url":  "https://github.com/Andrew9896/RFPlotTool/releases/download/v2.0.2/RFPlotTool.exe",
+    "sha256":  "de77077237faa36d29728b05b1c3b08963e64c0914b56c821ad37a6938a93b2b",
+    "notes":  "支持生成图表同步问题样本高亮"
 }
