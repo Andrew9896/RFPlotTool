@@ -651,6 +651,39 @@
     white-space: pre-wrap;
   }
 
+  .update-progress {
+    display: none;
+    margin-top: 12px;
+  }
+
+  .update-progress.show {
+    display: block;
+  }
+
+  .update-progress-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+    color: var(--text-dim);
+  }
+
+  .update-progress-track {
+    height: 9px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid var(--border);
+  }
+
+  .update-progress-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #22c55e, #6366f1);
+    transition: width .2s ease;
+  }
+
   .update-dialog-actions {
     padding: 14px 18px;
     border-top: 1px solid var(--border);
@@ -804,6 +837,15 @@
       <div class="update-dialog-body">
         <div id="update_version"></div>
         <div class="update-notes" id="update_notes"></div>
+        <div class="update-progress" id="update_progress">
+          <div class="update-progress-header">
+            <span id="update_progress_text">准备更新...</span>
+            <span id="update_progress_percent">0%</span>
+          </div>
+          <div class="update-progress-track">
+            <div class="update-progress-fill" id="update_progress_fill"></div>
+          </div>
+        </div>
       </div>
       <div class="update-dialog-actions">
         <button class="ghost" id="btn_skip_update" type="button">暂不更新</button>
@@ -830,6 +872,7 @@
     selectedHighlightSamples: new Set(),
     pendingUpdate: null,
     startupUpdateChecked: false,
+    updateProgressTimer: null,
   };
 
   // ---- 状态栏 ----
@@ -854,12 +897,66 @@
     const latest = updateInfo.display_version || updateInfo.version || "";
     $("update_version").textContent = `当前版本 ${current}，最新版本 ${latest}`;
     $("update_notes").textContent = updateInfo.notes || "暂无更新说明";
+    resetUpdateProgress();
     $("update_modal").classList.add("show");
   }
 
   function closeUpdateModal() {
+    if (state.updateProgressTimer) return;
     state.pendingUpdate = null;
     $("update_modal").classList.remove("show");
+  }
+
+  function resetUpdateProgress() {
+    if (state.updateProgressTimer) {
+      clearInterval(state.updateProgressTimer);
+      state.updateProgressTimer = null;
+    }
+    $("update_progress").classList.remove("show");
+    $("update_progress_text").textContent = "准备更新...";
+    $("update_progress_percent").textContent = "0%";
+    $("update_progress_fill").style.width = "0%";
+    $("btn_skip_update").disabled = false;
+    $("btn_update_now").disabled = false;
+  }
+
+  function renderUpdateProgress(progress) {
+    const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+    $("update_progress").classList.add("show");
+    $("update_progress_text").textContent = progress.error || progress.message || "正在更新...";
+    $("update_progress_percent").textContent = `${Math.round(percent)}%`;
+    $("update_progress_fill").style.width = `${percent}%`;
+  }
+
+  function startUpdateProgressPolling(button) {
+    if (state.updateProgressTimer) clearInterval(state.updateProgressTimer);
+    state.updateProgressTimer = setInterval(async () => {
+      try {
+        const progress = await api().update_progress();
+        if (!progress.ok) return;
+        renderUpdateProgress(progress);
+        if (!progress.running) {
+          clearInterval(state.updateProgressTimer);
+          state.updateProgressTimer = null;
+          if (progress.error) {
+            setStatus("更新失败: " + progress.error, "error");
+            showToast("更新失败", progress.error, "error");
+            button.disabled = false;
+            $("btn_skip_update").disabled = false;
+          } else {
+            setStatus(progress.message || "更新已开始", "busy");
+            showToast("正在更新", progress.message || "程序将退出并安装新版", "success");
+          }
+        }
+      } catch (err) {
+        clearInterval(state.updateProgressTimer);
+        state.updateProgressTimer = null;
+        button.disabled = false;
+        $("btn_skip_update").disabled = false;
+        setStatus("更新进度异常: " + (err.message || err), "error");
+        showToast("更新进度异常", String(err.message || err), "error");
+      }
+    }, 300);
   }
 
   async function checkForUpdate({ silent = false } = {}) {
@@ -1288,6 +1385,8 @@
   $("btn_update_now").addEventListener("click", async () => {
     const button = $("btn_update_now");
     button.disabled = true;
+    $("btn_skip_update").disabled = true;
+    renderUpdateProgress({ percent: 0, message: "准备开始更新..." });
     setStatus("更新下载中…", "busy");
     try {
       const res = await api().install_update(state.pendingUpdate || {});
@@ -1295,14 +1394,16 @@
         setStatus("更新失败: " + res.error, "error");
         showToast("更新失败", res.error, "error");
         button.disabled = false;
+        $("btn_skip_update").disabled = false;
         return;
       }
       setStatus(res.message || "更新已开始", "busy");
-      showToast("正在更新", res.message || "程序将退出并安装新版", "success");
+      startUpdateProgressPolling(button);
     } catch (err) {
       setStatus("更新异常: " + (err.message || err), "error");
       showToast("更新异常", String(err.message || err), "error");
       button.disabled = false;
+      $("btn_skip_update").disabled = false;
     }
   });
 

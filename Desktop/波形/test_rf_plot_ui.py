@@ -482,7 +482,7 @@ class RfPlotUiTests(unittest.TestCase):
         expected_payload = b"new rf plot"
         expected_hash = rf_plot_ui.hashlib.sha256(expected_payload).hexdigest()
 
-        def fake_download(url: str, path: Path) -> Path:
+        def fake_download(url: str, path: Path, progress_callback=None) -> Path:
             attempts.append(url)
             path.parent.mkdir(parents=True, exist_ok=True)
             payload = b"bad payload" if "gitee" in url else expected_payload
@@ -504,6 +504,39 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertEqual(attempts, ["https://gitee.example/RFPlotTool.exe", "https://github.example/RFPlotTool.exe"])
         self.assertEqual(destination.read_bytes(), expected_payload)
 
+    def test_download_update_file_reports_progress(self) -> None:
+        destination = self.test_dir / "progress.exe"
+        updates: list[tuple[int, int]] = []
+
+        class FakeResponse:
+            headers = {"Content-Length": "6"}
+
+            def __init__(self) -> None:
+                self._chunks = [b"ab", b"cd", b"ef", b""]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self, _size: int) -> bytes:
+                return self._chunks.pop(0)
+
+        original_urlopen = rf_plot_ui.urlopen
+        rf_plot_ui.urlopen = lambda _url, timeout: FakeResponse()
+        try:
+            rf_plot_ui.download_update_file(
+                "https://example.com/RFPlotTool.exe",
+                destination,
+                lambda downloaded, total: updates.append((downloaded, total)),
+            )
+        finally:
+            rf_plot_ui.urlopen = original_urlopen
+
+        self.assertEqual(destination.read_bytes(), b"abcdef")
+        self.assertEqual(updates, [(2, 6), (4, 6), (6, 6)])
+
     def test_api_check_update_prompts_before_installing(self) -> None:
         calls: list[str] = []
         original_fetch = rf_plot_ui.fetch_update_manifest
@@ -522,15 +555,17 @@ class RfPlotUiTests(unittest.TestCase):
                 "notes": "fallback update",
             }
 
-        def fake_download(urls, destination, expected_hash):
+        def fake_download(urls, destination, expected_hash, progress_callback=None):
             calls.append("download")
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(b"exe")
+            if progress_callback:
+                progress_callback(1, 1)
             return urls[0]
 
         def fake_ensure(runtime_dir):
             calls.append("ensure")
-            updater_path = runtime_dir / "updater.exe"
+            updater_path = self.test_dir / "updater.exe"
             updater_path.write_bytes(b"updater")
             return updater_path
 
@@ -542,8 +577,10 @@ class RfPlotUiTests(unittest.TestCase):
         rf_plot_ui.ensure_updater_executable = fake_ensure
         rf_plot_ui.launch_updater = fake_launch
         try:
-            prompt = rf_plot_ui.Api().check_update()
-            install = rf_plot_ui.Api().install_update(prompt)
+            api = rf_plot_ui.Api()
+            prompt = api.check_update()
+            install = api.install_update(prompt)
+            api._update_thread.join(timeout=2)
         finally:
             rf_plot_ui.fetch_update_manifest = original_fetch
             rf_plot_ui.download_update_with_fallback = original_download
@@ -555,6 +592,28 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertEqual(prompt["display_version"], "V0.0.4")
         self.assertEqual(calls, ["download", "ensure", "launch"])
         self.assertTrue(install["ok"], install)
+        self.assertEqual(rf_plot_ui.Api().update_progress()["percent"], 100)
+
+    def test_ensure_updater_executable_replaces_stale_cache(self) -> None:
+        bundled = self.test_dir / "bundled_updater.exe"
+        bundled.write_bytes(b"valid updater")
+        target_dir = self.test_dir / "runtime"
+        target_dir.mkdir()
+        stale = target_dir / rf_plot_ui.UPDATER_EXE_NAME
+        stale.write_bytes(b"broken")
+        original_resource_path = rf_plot_ui.resource_path
+
+        def fake_resource_path(name: str) -> Path:
+            return bundled if name == rf_plot_ui.UPDATER_EXE_NAME else original_resource_path(name)
+
+        rf_plot_ui.resource_path = fake_resource_path
+        try:
+            updater_path = rf_plot_ui.ensure_updater_executable(target_dir)
+        finally:
+            rf_plot_ui.resource_path = original_resource_path
+
+        self.assertEqual(updater_path, stale)
+        self.assertEqual(updater_path.read_bytes(), b"valid updater")
 
     def test_extract_bundled_updater_uses_resource_when_app_dir_missing(self) -> None:
         bundled = self.test_dir / "bundled_updater.exe"
@@ -599,6 +658,8 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertIn("api().install_update", html)
         self.assertIn("scheduleStartupUpdateCheck", html)
         self.assertIn("showUpdateModal", html)
+        self.assertIn('id="update_progress"', html)
+        self.assertIn("api().update_progress", html)
 
     def test_run_gui_enables_main_window_close_confirmation(self) -> None:
         self.assertIn("confirm_close=True", Path("rf_plot_ui.py").read_text(encoding="utf-8"))

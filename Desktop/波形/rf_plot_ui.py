@@ -18,9 +18,11 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
+from typing import Callable
 from urllib.request import urlopen
 
 import matplotlib
@@ -36,13 +38,21 @@ from openpyxl.drawing.image import Image as ExcelImage
 
 CSV_PATTERN = "*.csv"
 DEFAULT_OUTPUT_SUBDIR = "output"
-APP_VERSION = "0.0.5"
-APP_DISPLAY_VERSION = "V0.0.5"
+APP_VERSION = "0.0.6"
+APP_DISPLAY_VERSION = "V0.0.6"
 APP_UPDATE_EPOCH = 1
 DEFAULT_UPDATE_MANIFEST_URL = "https://Andrew9896.github.io/RFPlotTool/version.json"
 UPDATE_MANIFEST_URL = os.environ.get("RF_PLOT_TOOL_UPDATE_URL", DEFAULT_UPDATE_MANIFEST_URL).strip()
 UPDATER_EXE_NAME = "updater.exe"
 UPDATE_TIMEOUT_SECONDS = 20
+UPDATE_PROGRESS_LOCK = threading.Lock()
+UPDATE_PROGRESS: dict[str, object] = {
+    "running": False,
+    "stage": "idle",
+    "percent": 0,
+    "message": "",
+    "error": "",
+}
 ANT_PATTERN = re.compile(
     r"^(S\d+):(\w+)\s*\(([^)]+)\)\s*Band:b(\d+)[\s:]+(?:Freq:\s*)?([0-9.]+)\s*M(?:Hz)?\s+Mag$"
 )
@@ -225,23 +235,57 @@ def fetch_update_manifest(manifest_url: str) -> dict:
     return json.loads(payload.decode("utf-8-sig"))
 
 
-def download_update_file(url: str, destination: Path) -> Path:
+def set_update_progress(stage: str, percent: int, message: str, error: str = "", running: bool = True) -> None:
+    with UPDATE_PROGRESS_LOCK:
+        UPDATE_PROGRESS.update({
+            "running": running,
+            "stage": stage,
+            "percent": max(0, min(100, int(percent))),
+            "message": message,
+            "error": error,
+        })
+
+
+def get_update_progress_snapshot() -> dict:
+    with UPDATE_PROGRESS_LOCK:
+        return dict(UPDATE_PROGRESS)
+
+
+def download_update_file(
+    url: str,
+    destination: Path,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     with urlopen(url, timeout=UPDATE_TIMEOUT_SECONDS) as response:
+        total = 0
+        try:
+            total = int(response.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        downloaded = 0
         with destination.open("wb") as output:
             while True:
                 chunk = response.read(1024 * 1024)
                 if not chunk:
                     break
                 output.write(chunk)
+                downloaded += len(chunk)
+                if progress_callback:
+                    progress_callback(downloaded, total)
     return destination
 
 
-def download_update_with_fallback(download_urls: list[str], destination: Path, expected_sha256: str) -> str:
+def download_update_with_fallback(
+    download_urls: list[str],
+    destination: Path,
+    expected_sha256: str,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> str:
     errors: list[str] = []
     for url in download_urls:
         try:
-            download_update_file(url, destination)
+            download_update_file(url, destination, progress_callback)
             actual_sha256 = file_sha256(destination)
             if actual_sha256 == expected_sha256:
                 return url
@@ -256,8 +300,6 @@ def download_update_with_fallback(download_urls: list[str], destination: Path, e
 def ensure_updater_executable(runtime_dir: Path) -> Path:
     runtime_dir.mkdir(parents=True, exist_ok=True)
     target = runtime_dir / UPDATER_EXE_NAME
-    if target.exists():
-        return target
     bundled = resource_path(UPDATER_EXE_NAME)
     if not bundled.exists():
         raise FileNotFoundError(f"缺少更新器: {bundled}")
@@ -780,6 +822,7 @@ class Api:
 
     def __init__(self) -> None:
         self._window = None
+        self._update_thread: threading.Thread | None = None
 
     def bind_window(self, window) -> None:
         self._window = window
@@ -823,7 +866,6 @@ class Api:
     # ---- 在线更新 ----
     def check_update(self, payload: dict | None = None) -> dict:
         payload = payload or {}
-        install = bool(payload.get("install"))
         if not UPDATE_MANIFEST_URL:
             return {"ok": False, "error": "未配置更新地址，请先设置 UPDATE_MANIFEST_URL"}
 
@@ -839,28 +881,6 @@ class Api:
                     "current_display_version": APP_DISPLAY_VERSION,
                     "message": "当前已是最新版本",
                 }
-            if not install:
-                return {
-                    "ok": True,
-                    "has_update": True,
-                    "version": manifest["version"],
-                    "display_version": manifest.get("display_version", manifest["version"]),
-                    "current_version": APP_VERSION,
-                    "current_display_version": APP_DISPLAY_VERSION,
-                    "notes": manifest.get("notes", ""),
-                    "message": "发现新版本",
-                }
-
-            download_dir = Path(tempfile.gettempdir()) / "RFPlotTool-updates"
-            source_path = download_dir / f"RFPlotTool-{manifest['version']}.exe"
-            selected_url = download_update_with_fallback(manifest["download_urls"], source_path, manifest["sha256"])
-
-            app_dir = app_base_dir()
-            target_path = Path(sys.executable).resolve() if getattr(sys, "frozen", False) else app_dir / "RFPlotTool.exe"
-            updater_path = ensure_updater_executable(download_dir)
-            launch_updater(updater_path, source_path, target_path)
-            if self._window:
-                self._window.destroy()
             return {
                 "ok": True,
                 "has_update": True,
@@ -869,16 +889,78 @@ class Api:
                 "current_version": APP_VERSION,
                 "current_display_version": APP_DISPLAY_VERSION,
                 "notes": manifest.get("notes", ""),
-                "download_url": selected_url,
-                "message": "更新已下载，程序将退出并安装新版",
+                "download_urls": manifest["download_urls"],
+                "sha256": manifest["sha256"],
+                "message": "发现新版本",
             }
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    def _install_update_worker(self, manifest: dict) -> None:
+        try:
+            download_dir = Path(tempfile.gettempdir()) / "RFPlotTool-updates"
+            source_path = download_dir / f"RFPlotTool-{manifest['version']}.exe"
+
+            def report_download(downloaded: int, total: int) -> None:
+                if total > 0:
+                    percent = min(80, max(1, int(downloaded * 80 / total)))
+                    message = f"正在下载更新 {downloaded / 1024 / 1024:.1f}/{total / 1024 / 1024:.1f} MB"
+                else:
+                    percent = 10
+                    message = f"正在下载更新 {downloaded / 1024 / 1024:.1f} MB"
+                set_update_progress("download", percent, message)
+
+            set_update_progress("download", 1, "正在连接下载服务器...")
+            selected_url = download_update_with_fallback(
+                manifest["download_urls"],
+                source_path,
+                manifest["sha256"],
+                report_download,
+            )
+            set_update_progress("verify", 85, "正在校验更新文件...")
+
+            app_dir = app_base_dir()
+            target_path = Path(sys.executable).resolve() if getattr(sys, "frozen", False) else app_dir / "RFPlotTool.exe"
+            set_update_progress("prepare", 92, "正在准备安装器...")
+            updater_path = ensure_updater_executable(download_dir)
+            set_update_progress("launch", 98, "正在启动安装器...")
+            launch_updater(updater_path, source_path, target_path)
+            set_update_progress(
+                "launch",
+                100,
+                f"更新已下载，程序将退出并安装新版（来源：{selected_url}）",
+                running=False,
+            )
+            if self._window:
+                self._window.destroy()
+        except Exception as exc:
+            set_update_progress("error", 100, "更新失败", str(exc), running=False)
+
     def install_update(self, payload: dict | None = None) -> dict:
         payload = payload or {}
-        payload["install"] = True
-        return self.check_update(payload)
+        if not payload.get("download_urls") or not payload.get("sha256"):
+            checked = self.check_update()
+            if not checked.get("ok") or not checked.get("has_update"):
+                return checked
+            payload = checked
+
+        with UPDATE_PROGRESS_LOCK:
+            if bool(UPDATE_PROGRESS.get("running")):
+                return {"ok": False, "error": "已有更新任务正在运行"}
+            UPDATE_PROGRESS.update({
+                "running": True,
+                "stage": "start",
+                "percent": 0,
+                "message": "准备开始更新...",
+                "error": "",
+            })
+
+        self._update_thread = threading.Thread(target=self._install_update_worker, args=(payload,), daemon=True)
+        self._update_thread.start()
+        return {"ok": True, "started": True, "message": "更新已开始"}
+
+    def update_progress(self) -> dict:
+        return {"ok": True, **get_update_progress_snapshot()}
 
     def data_from_payload(self, payload: dict) -> tuple[ParsedData, Path]:
         if payload.get("group_mode") == "csv_group":
