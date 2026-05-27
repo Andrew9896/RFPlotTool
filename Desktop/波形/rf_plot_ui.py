@@ -620,9 +620,10 @@ def generate_charts(
     output_dir: Path,
     selected_keys: list[str],
     labels: ChartLabels,
+    highlight_sample_ids: list[str] | None = None,
 ) -> list[Path]:
     data = parse_csv(csv_path)
-    return generate_charts_for_data(data, output_dir, selected_keys, labels)
+    return generate_charts_for_data(data, output_dir, selected_keys, labels, highlight_sample_ids)
 
 
 def generate_charts_for_data(
@@ -630,6 +631,7 @@ def generate_charts_for_data(
     output_dir: Path,
     selected_keys: list[str],
     labels: ChartLabels,
+    highlight_sample_ids: list[str] | None = None,
 ) -> list[Path]:
     if not selected_keys:
         raise ValueError("请至少勾选一个天线。")
@@ -643,7 +645,15 @@ def generate_charts_for_data(
 
     for key in selected_keys:
         fig, ax = plt.subplots(figsize=(14, 7.5), dpi=160)
-        draw_chart(ax, key, data.antennas[key], data, labels, legend_fontsize=9)
+        draw_chart(
+            ax,
+            key,
+            data.antennas[key],
+            data,
+            labels,
+            legend_fontsize=9,
+            highlight_sample_ids=highlight_sample_ids,
+        )
         fig.tight_layout()
         out_path = output_dir / f"{safe_filename(key)}_compare.png"
         fig.savefig(out_path)
@@ -657,7 +667,15 @@ def generate_charts_for_data(
     fig.suptitle(labels.overview_title, fontsize=18, y=0.99)
     flat = list(axes.ravel())
     for ax, key in zip(flat, selected_keys):
-        draw_chart(ax, key, data.antennas[key], data, labels, legend_fontsize=6)
+        draw_chart(
+            ax,
+            key,
+            data.antennas[key],
+            data,
+            labels,
+            legend_fontsize=6,
+            highlight_sample_ids=highlight_sample_ids,
+        )
     for ax in flat[len(selected_keys) :]:
         ax.axis("off")
     fig.tight_layout(rect=(0, 0, 1, 0.96))
@@ -858,7 +876,13 @@ class Api:
             output_dir = base_output / csv_subfolder
             selected = list(payload.get("selected_antennas") or [])
             labels = chart_labels_from_payload(payload)
-            outputs = generate_charts_for_data(data, output_dir, selected, labels)
+            outputs = generate_charts_for_data(
+                data,
+                output_dir,
+                selected,
+                labels,
+                highlight_sample_ids=normalize_highlight_sample_ids(payload),
+            )
             excel_path = create_excel_report(outputs, output_dir / "charts.xlsx")
             outputs.append(excel_path)
             return {

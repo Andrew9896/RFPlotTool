@@ -105,6 +105,32 @@ class RfPlotUiTests(unittest.TestCase):
             self.assertTrue(path.exists())
             self.assertGreater(path.stat().st_size, 0)
 
+    def test_generate_charts_for_data_passes_highlight_samples_to_each_chart(self) -> None:
+        write_sample_csv(self.csv_path, 2)
+        data = rf_plot_ui.parse_csv(self.csv_path)
+        out_dir = self.test_dir / "highlight_out"
+        captured: list[list[str] | None] = []
+        original_draw_chart = rf_plot_ui.draw_chart
+
+        def capture_draw_chart(*args, **kwargs) -> None:
+            captured.append(kwargs.get("highlight_sample_ids"))
+
+        rf_plot_ui.draw_chart = capture_draw_chart
+        try:
+            outputs = rf_plot_ui.generate_charts_for_data(
+                data,
+                out_dir,
+                ["S11:Ant2(0:0:0)", "S11:Ant8(0:0:0)"],
+                rf_plot_ui.ChartLabels(),
+                highlight_sample_ids=["s0:r0", "s1:r0"],
+            )
+        finally:
+            rf_plot_ui.draw_chart = original_draw_chart
+            rf_plot_ui.plt.close("all")
+
+        self.assertEqual(len(outputs), 3)
+        self.assertEqual(captured, [["s0:r0", "s1:r0"]] * 4)
+
     def test_create_excel_report_embeds_summary_and_antenna_charts(self) -> None:
         write_sample_csv(self.csv_path, 3)
         out_dir = self.test_dir / "out"
@@ -141,6 +167,36 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertIn("summary_all_compare.png", result["files"])
         self.assertIn("S11_Ant2_0_0_0_compare.png", result["files"])
         self.assertTrue((out_dir / self.csv_path.stem / "charts.xlsx").exists())
+
+    def test_api_generate_forwards_highlight_sample_ids(self) -> None:
+        write_sample_csv(self.csv_path, 2)
+        out_dir = self.test_dir / "api_highlight_out"
+        captured: dict[str, list[str] | None] = {}
+        original_generate_charts = rf_plot_ui.generate_charts_for_data
+        original_create_excel = rf_plot_ui.create_excel_report
+
+        def capture_generate_charts(data, output_dir, selected_keys, labels, highlight_sample_ids):
+            captured["highlight_sample_ids"] = highlight_sample_ids
+            return []
+
+        def fake_create_excel_report(image_paths, excel_path):
+            return excel_path
+
+        rf_plot_ui.generate_charts_for_data = capture_generate_charts
+        rf_plot_ui.create_excel_report = fake_create_excel_report
+        try:
+            result = rf_plot_ui.Api().generate({
+                "csv_path": str(self.csv_path),
+                "output_dir": str(out_dir),
+                "selected_antennas": ["S11:Ant2(0:0:0)"],
+                "highlight_sample_ids": ["s0:r0", "s1:r0"],
+            })
+        finally:
+            rf_plot_ui.generate_charts_for_data = original_generate_charts
+            rf_plot_ui.create_excel_report = original_create_excel
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(captured["highlight_sample_ids"], ["s0:r0", "s1:r0"])
 
     def test_api_generate_supports_csv_group_mode(self) -> None:
         csv_a = self.test_dir / "group_a.csv"
@@ -403,6 +459,14 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertIn("renderSampleSearchResults", html)
         self.assertIn("getHighlightSampleIds()", html)
         self.assertIn("highlight_sample_ids: getHighlightSampleIds()", html)
+
+    def test_webui_generate_payload_includes_highlight_sample_ids(self) -> None:
+        html = Path("webui.html").read_text(encoding="utf-8")
+        start = html.index('$("btn_generate").addEventListener')
+        end = html.index("  // ----", start)
+        generate_block = html[start:end]
+
+        self.assertIn("highlight_sample_ids: getHighlightSampleIds()", generate_block)
 
     def test_updater_replace_executable_backs_up_and_replaces_target(self) -> None:
         target = self.test_dir / "RFPlotTool.exe"

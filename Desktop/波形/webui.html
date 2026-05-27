@@ -1226,6 +1226,7 @@
       group_labels: getGroupLabels(),
       group_colors: getGroupColors(),
       selected_antennas: Array.from(state.selected),
+      highlight_sample_ids: getHighlightSampleIds(),
     });
     try {
       const res = await api().generate(payload);
