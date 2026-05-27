@@ -1,12 +1,12 @@
 {
-  "version": "0.0.5",
-  "app_version": "0.0.5",
-  "display_version": "V0.0.5",
+  "version": "0.0.6",
+  "app_version": "0.0.6",
+  "display_version": "V0.0.6",
   "epoch": 1,
-  "url": "https://gitee.com/andrewstephy/rfplot-tool/releases/download/v0.0.5/RFPlotTool.exe",
+  "url": "https://gitee.com/andrewstephy/rfplot-tool/releases/download/v0.0.6/RFPlotTool.exe",
   "mirrors": [
-    "https://github.com/Andrew9896/RFPlotTool/releases/download/v0.0.5/RFPlotTool.exe"
+    "https://github.com/Andrew9896/RFPlotTool/releases/download/v0.0.6/RFPlotTool.exe"
   ],
-  "sha256": "1ee02de43d69eec16ab4316df5ed341d186e05b00b3718520c36169a9f6acc5c",
-  "notes": "V0.0.5：修复检查更新时遇到 UTF-8 BOM 清单会报错的问题；保留 V0.0.4 的主窗口退出确认。"
+  "sha256": "15b8f4489caddf8f1cb9540713343fd72a633b86c097bc343559d1ee393b1170",
+  "notes": "V0.0.6：修复临时 updater 缓存损坏导致的 WinError 216；更新下载时增加真实进度条。"
 }
