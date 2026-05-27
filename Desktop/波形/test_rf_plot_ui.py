@@ -3,6 +3,7 @@
 import csv
 import base64
 import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -415,17 +416,36 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertEqual(rf_plot_ui.compare_versions("2.0", "2.0.0"), 0)
         self.assertGreater(rf_plot_ui.compare_versions("2.1.0", "2.0.9"), 0)
 
+    def test_manifest_epoch_allows_version_series_reset(self) -> None:
+        manifest = rf_plot_ui.normalize_update_manifest({
+            "version": "0.0.4",
+            "epoch": 1,
+            "url": "https://example.com/RFPlotTool-0.0.4.exe",
+            "sha256": "a" * 64,
+        }, "2.0.2")
+
+        self.assertTrue(manifest["has_update"])
+        self.assertEqual(manifest["epoch"], 1)
+
     def test_normalize_update_manifest_requires_newer_version_url_and_sha256(self) -> None:
         manifest = rf_plot_ui.normalize_update_manifest({
             "version": "2.1.0",
             "url": "https://example.com/RFPlotTool-2.1.0.exe",
             "sha256": "a" * 64,
+            "mirrors": ["https://mirror.example.com/RFPlotTool-2.1.0.exe"],
             "notes": "test release",
         }, "2.0.0")
 
         self.assertTrue(manifest["has_update"])
         self.assertEqual(manifest["version"], "2.1.0")
         self.assertEqual(manifest["sha256"], "a" * 64)
+        self.assertEqual(
+            manifest["download_urls"],
+            [
+                "https://example.com/RFPlotTool-2.1.0.exe",
+                "https://mirror.example.com/RFPlotTool-2.1.0.exe",
+            ],
+        )
 
     def test_normalize_update_manifest_reports_latest_when_not_newer(self) -> None:
         manifest = rf_plot_ui.normalize_update_manifest({
@@ -435,6 +455,105 @@ class RfPlotUiTests(unittest.TestCase):
         }, "2.0.0")
 
         self.assertFalse(manifest["has_update"])
+
+    def test_download_update_file_tries_mirrors_until_hash_matches(self) -> None:
+        destination = self.test_dir / "downloaded.exe"
+        attempts: list[str] = []
+        expected_payload = b"new rf plot"
+        expected_hash = rf_plot_ui.hashlib.sha256(expected_payload).hexdigest()
+
+        def fake_download(url: str, path: Path) -> Path:
+            attempts.append(url)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = b"bad payload" if "gitee" in url else expected_payload
+            path.write_bytes(payload)
+            return path
+
+        original_download = rf_plot_ui.download_update_file
+        rf_plot_ui.download_update_file = fake_download
+        try:
+            selected = rf_plot_ui.download_update_with_fallback(
+                ["https://gitee.example/RFPlotTool.exe", "https://github.example/RFPlotTool.exe"],
+                destination,
+                expected_hash,
+            )
+        finally:
+            rf_plot_ui.download_update_file = original_download
+
+        self.assertEqual(selected, "https://github.example/RFPlotTool.exe")
+        self.assertEqual(attempts, ["https://gitee.example/RFPlotTool.exe", "https://github.example/RFPlotTool.exe"])
+        self.assertEqual(destination.read_bytes(), expected_payload)
+
+    def test_api_check_update_prompts_before_installing(self) -> None:
+        calls: list[str] = []
+        original_fetch = rf_plot_ui.fetch_update_manifest
+        original_download = rf_plot_ui.download_update_with_fallback
+        original_launch = rf_plot_ui.launch_updater
+        original_ensure = rf_plot_ui.ensure_updater_executable
+
+        def fake_fetch(_url: str) -> dict:
+            return {
+                "version": "0.0.4",
+                "display_version": "V0.0.4",
+                "epoch": 2,
+                "url": "https://gitee.example/RFPlotTool.exe",
+                "mirrors": ["https://github.example/RFPlotTool.exe"],
+                "sha256": "a" * 64,
+                "notes": "fallback update",
+            }
+
+        def fake_download(urls, destination, expected_hash):
+            calls.append("download")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"exe")
+            return urls[0]
+
+        def fake_ensure(runtime_dir):
+            calls.append("ensure")
+            updater_path = runtime_dir / "updater.exe"
+            updater_path.write_bytes(b"updater")
+            return updater_path
+
+        def fake_launch(updater_path, source_path, target_path):
+            calls.append("launch")
+
+        rf_plot_ui.fetch_update_manifest = fake_fetch
+        rf_plot_ui.download_update_with_fallback = fake_download
+        rf_plot_ui.ensure_updater_executable = fake_ensure
+        rf_plot_ui.launch_updater = fake_launch
+        try:
+            prompt = rf_plot_ui.Api().check_update()
+            install = rf_plot_ui.Api().install_update(prompt)
+        finally:
+            rf_plot_ui.fetch_update_manifest = original_fetch
+            rf_plot_ui.download_update_with_fallback = original_download
+            rf_plot_ui.ensure_updater_executable = original_ensure
+            rf_plot_ui.launch_updater = original_launch
+
+        self.assertTrue(prompt["ok"], prompt)
+        self.assertTrue(prompt["has_update"])
+        self.assertEqual(prompt["display_version"], "V0.0.4")
+        self.assertEqual(calls, ["download", "ensure", "launch"])
+        self.assertTrue(install["ok"], install)
+
+    def test_extract_bundled_updater_uses_resource_when_app_dir_missing(self) -> None:
+        bundled = self.test_dir / "bundled_updater.exe"
+        bundled.write_bytes(b"updater")
+        target_dir = self.test_dir / "runtime"
+        original_resource_path = rf_plot_ui.resource_path
+
+        def fake_resource_path(name: str) -> Path:
+            return bundled if name == rf_plot_ui.UPDATER_EXE_NAME else original_resource_path(name)
+
+        rf_plot_ui.resource_path = fake_resource_path
+        try:
+            updater_path = rf_plot_ui.ensure_updater_executable(target_dir)
+        finally:
+            rf_plot_ui.resource_path = original_resource_path
+
+        self.assertTrue(updater_path.exists())
+        self.assertEqual(updater_path.read_bytes(), b"updater")
+        self.assertEqual(updater_path.parent, target_dir)
 
     def test_file_sha256_returns_expected_digest(self) -> None:
         payload_path = self.test_dir / "payload.bin"
@@ -449,6 +568,21 @@ class RfPlotUiTests(unittest.TestCase):
         html = Path("webui.html").read_text(encoding="utf-8")
         self.assertIn('id="btn_check_update"', html)
         self.assertIn("api().check_update", html)
+
+    def test_webui_prompts_before_installing_available_update(self) -> None:
+        html = Path("webui.html").read_text(encoding="utf-8")
+
+        self.assertIn('id="update_modal"', html)
+        self.assertIn('id="btn_update_now"', html)
+        self.assertIn('id="btn_skip_update"', html)
+        self.assertIn("api().check_update({ install: false })", html)
+        self.assertIn("api().install_update", html)
+        self.assertIn("scheduleStartupUpdateCheck", html)
+        self.assertIn("showUpdateModal", html)
+
+    def test_rfplottool_spec_embeds_updater_exe(self) -> None:
+        spec = Path("RFPlotTool.spec").read_text(encoding="utf-8")
+        self.assertIn("dist/updater.exe", spec.replace("\\", "/"))
 
     def test_webui_has_problem_sample_selector_and_preview_payload(self) -> None:
         html = Path("webui.html").read_text(encoding="utf-8")

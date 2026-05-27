@@ -36,7 +36,9 @@ from openpyxl.drawing.image import Image as ExcelImage
 
 CSV_PATTERN = "*.csv"
 DEFAULT_OUTPUT_SUBDIR = "output"
-APP_VERSION = "2.0.2"
+APP_VERSION = "0.0.3"
+APP_DISPLAY_VERSION = "V0.0.3"
+APP_UPDATE_EPOCH = 1
 DEFAULT_UPDATE_MANIFEST_URL = "https://Andrew9896.github.io/RFPlotTool/version.json"
 UPDATE_MANIFEST_URL = os.environ.get("RF_PLOT_TOOL_UPDATE_URL", DEFAULT_UPDATE_MANIFEST_URL).strip()
 UPDATER_EXE_NAME = "updater.exe"
@@ -151,22 +153,46 @@ def compare_versions(left: str, right: str) -> int:
     return 0
 
 
-def normalize_update_manifest(manifest: dict, current_version: str) -> dict:
+def normalize_update_manifest(
+    manifest: dict,
+    current_version: str,
+    current_epoch: int = 0,
+) -> dict:
     version = str(manifest.get("version", "")).strip()
     if not version:
         raise ValueError("更新清单缺少 version")
+    app_version = str(manifest.get("app_version") or version).strip()
+    display_version = str(manifest.get("display_version") or app_version).strip()
+    try:
+        epoch = int(manifest.get("epoch") or 0)
+    except (TypeError, ValueError):
+        raise ValueError("更新清单 epoch 必须是数字")
 
-    if compare_versions(version, current_version) <= 0:
+    has_update = epoch > current_epoch
+    if epoch == current_epoch:
+        has_update = compare_versions(app_version, current_version) > 0
+    if not has_update:
         return {
             "has_update": False,
             "version": version,
+            "app_version": app_version,
+            "display_version": display_version,
+            "epoch": epoch,
             "current_version": current_version,
             "notes": str(manifest.get("notes", "")).strip(),
         }
 
     url = str(manifest.get("url", "")).strip()
+    mirrors = manifest.get("mirrors") or []
+    if isinstance(mirrors, str):
+        mirrors = [mirrors]
+    download_urls: list[str] = []
+    for candidate in [url, *mirrors]:
+        candidate_url = str(candidate or "").strip()
+        if candidate_url and candidate_url not in download_urls:
+            download_urls.append(candidate_url)
     sha256 = str(manifest.get("sha256", "")).strip().lower()
-    if not url:
+    if not download_urls:
         raise ValueError("更新清单缺少 url")
     if not re.fullmatch(r"[0-9a-f]{64}", sha256):
         raise ValueError("更新清单 sha256 必须是 64 位十六进制字符串")
@@ -174,8 +200,12 @@ def normalize_update_manifest(manifest: dict, current_version: str) -> dict:
     return {
         "has_update": True,
         "version": version,
+        "app_version": app_version,
+        "display_version": display_version,
+        "epoch": epoch,
         "current_version": current_version,
-        "url": url,
+        "url": download_urls[0],
+        "download_urls": download_urls,
         "sha256": sha256,
         "notes": str(manifest.get("notes", "")).strip(),
     }
@@ -205,6 +235,34 @@ def download_update_file(url: str, destination: Path) -> Path:
                     break
                 output.write(chunk)
     return destination
+
+
+def download_update_with_fallback(download_urls: list[str], destination: Path, expected_sha256: str) -> str:
+    errors: list[str] = []
+    for url in download_urls:
+        try:
+            download_update_file(url, destination)
+            actual_sha256 = file_sha256(destination)
+            if actual_sha256 == expected_sha256:
+                return url
+            destination.unlink(missing_ok=True)
+            errors.append(f"{url}: sha256 mismatch {actual_sha256}")
+        except Exception as exc:
+            destination.unlink(missing_ok=True)
+            errors.append(f"{url}: {exc}")
+    raise RuntimeError("所有更新下载地址均失败: " + " | ".join(errors))
+
+
+def ensure_updater_executable(runtime_dir: Path) -> Path:
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    target = runtime_dir / UPDATER_EXE_NAME
+    if target.exists():
+        return target
+    bundled = resource_path(UPDATER_EXE_NAME)
+    if not bundled.exists():
+        raise FileNotFoundError(f"缺少更新器: {bundled}")
+    target.write_bytes(bundled.read_bytes())
+    return target
 
 
 def launch_updater(updater_path: Path, source_path: Path, target_path: Path) -> None:
@@ -758,53 +816,69 @@ class Api:
             "ok": True,
             "output_dir": str(default_output_dir()),
             "version": APP_VERSION,
+            "display_version": APP_DISPLAY_VERSION,
         }
 
     # ---- 扫描 CSV ----
     # ---- 在线更新 ----
-    def check_update(self) -> dict:
+    def check_update(self, payload: dict | None = None) -> dict:
+        payload = payload or {}
+        install = bool(payload.get("install"))
         if not UPDATE_MANIFEST_URL:
             return {"ok": False, "error": "未配置更新地址，请先设置 UPDATE_MANIFEST_URL"}
 
         try:
-            manifest = normalize_update_manifest(fetch_update_manifest(UPDATE_MANIFEST_URL), APP_VERSION)
+            manifest = normalize_update_manifest(fetch_update_manifest(UPDATE_MANIFEST_URL), APP_VERSION, APP_UPDATE_EPOCH)
             if not manifest["has_update"]:
                 return {
                     "ok": True,
                     "has_update": False,
                     "version": manifest["version"],
+                    "display_version": manifest.get("display_version", manifest["version"]),
                     "current_version": APP_VERSION,
+                    "current_display_version": APP_DISPLAY_VERSION,
                     "message": "当前已是最新版本",
+                }
+            if not install:
+                return {
+                    "ok": True,
+                    "has_update": True,
+                    "version": manifest["version"],
+                    "display_version": manifest.get("display_version", manifest["version"]),
+                    "current_version": APP_VERSION,
+                    "current_display_version": APP_DISPLAY_VERSION,
+                    "notes": manifest.get("notes", ""),
+                    "message": "发现新版本",
                 }
 
             download_dir = Path(tempfile.gettempdir()) / "RFPlotTool-updates"
             source_path = download_dir / f"RFPlotTool-{manifest['version']}.exe"
-            download_update_file(manifest["url"], source_path)
-            actual_sha256 = file_sha256(source_path)
-            if actual_sha256 != manifest["sha256"]:
-                source_path.unlink(missing_ok=True)
-                return {
-                    "ok": False,
-                    "error": "更新文件校验失败，已取消更新",
-                    "expected_sha256": manifest["sha256"],
-                    "actual_sha256": actual_sha256,
-                }
+            selected_url = download_update_with_fallback(manifest["download_urls"], source_path, manifest["sha256"])
 
             app_dir = app_base_dir()
             target_path = Path(sys.executable).resolve() if getattr(sys, "frozen", False) else app_dir / "RFPlotTool.exe"
-            launch_updater(app_dir / UPDATER_EXE_NAME, source_path, target_path)
+            updater_path = ensure_updater_executable(download_dir)
+            launch_updater(updater_path, source_path, target_path)
             if self._window:
                 self._window.destroy()
             return {
                 "ok": True,
                 "has_update": True,
                 "version": manifest["version"],
+                "display_version": manifest.get("display_version", manifest["version"]),
                 "current_version": APP_VERSION,
+                "current_display_version": APP_DISPLAY_VERSION,
                 "notes": manifest.get("notes", ""),
+                "download_url": selected_url,
                 "message": "更新已下载，程序将退出并安装新版",
             }
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def install_update(self, payload: dict | None = None) -> dict:
+        payload = payload or {}
+        payload["install"] = True
+        return self.check_update(payload)
 
     def data_from_payload(self, payload: dict) -> tuple[ParsedData, Path]:
         if payload.get("group_mode") == "csv_group":
