@@ -427,6 +427,26 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertTrue(manifest["has_update"])
         self.assertEqual(manifest["epoch"], 1)
 
+    def test_fetch_update_manifest_accepts_utf8_bom(self) -> None:
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self) -> bytes:
+                return b'\xef\xbb\xbf{"version":"0.0.5"}'
+
+        original_urlopen = rf_plot_ui.urlopen
+        rf_plot_ui.urlopen = lambda _url, timeout: FakeResponse()
+        try:
+            manifest = rf_plot_ui.fetch_update_manifest("https://example.com/version.json")
+        finally:
+            rf_plot_ui.urlopen = original_urlopen
+
+        self.assertEqual(manifest["version"], "0.0.5")
+
     def test_normalize_update_manifest_requires_newer_version_url_and_sha256(self) -> None:
         manifest = rf_plot_ui.normalize_update_manifest({
             "version": "2.1.0",

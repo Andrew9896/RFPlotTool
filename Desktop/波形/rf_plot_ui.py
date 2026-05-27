@@ -36,8 +36,8 @@ from openpyxl.drawing.image import Image as ExcelImage
 
 CSV_PATTERN = "*.csv"
 DEFAULT_OUTPUT_SUBDIR = "output"
-APP_VERSION = "0.0.4"
-APP_DISPLAY_VERSION = "V0.0.4"
+APP_VERSION = "0.0.5"
+APP_DISPLAY_VERSION = "V0.0.5"
 APP_UPDATE_EPOCH = 1
 DEFAULT_UPDATE_MANIFEST_URL = "https://Andrew9896.github.io/RFPlotTool/version.json"
 UPDATE_MANIFEST_URL = os.environ.get("RF_PLOT_TOOL_UPDATE_URL", DEFAULT_UPDATE_MANIFEST_URL).strip()
@@ -222,7 +222,7 @@ def file_sha256(path: Path) -> str:
 def fetch_update_manifest(manifest_url: str) -> dict:
     with urlopen(manifest_url, timeout=UPDATE_TIMEOUT_SECONDS) as response:
         payload = response.read()
-    return json.loads(payload.decode("utf-8"))
+    return json.loads(payload.decode("utf-8-sig"))
 
 
 def download_update_file(url: str, destination: Path) -> Path:

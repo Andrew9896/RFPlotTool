@@ -1,12 +1,12 @@
-﻿{
-    "version":  "0.0.4",
-    "app_version":  "0.0.4",
-    "display_version":  "V0.0.4",
-    "epoch":  1,
-    "url":  "https://gitee.com/andrewstephy/rfplot-tool/releases/download/v0.0.4/RFPlotTool.exe",
-    "mirrors":  [
-                    "https://github.com/Andrew9896/RFPlotTool/releases/download/v0.0.4/RFPlotTool.exe"
-                ],
-    "sha256":  "7bcb94220e73b2dddb86df2a1ddd51749842e057f667c61b58e0e4609dcd32c3",
-    "notes":  "V0.0.4：主窗口点击关闭时增加退出确认，避免预览操作时误关程序。"
+{
+  "version": "0.0.5",
+  "app_version": "0.0.5",
+  "display_version": "V0.0.5",
+  "epoch": 1,
+  "url": "https://gitee.com/andrewstephy/rfplot-tool/releases/download/v0.0.5/RFPlotTool.exe",
+  "mirrors": [
+    "https://github.com/Andrew9896/RFPlotTool/releases/download/v0.0.5/RFPlotTool.exe"
+  ],
+  "sha256": "1ee02de43d69eec16ab4316df5ed341d186e05b00b3718520c36169a9f6acc5c",
+  "notes": "V0.0.5：修复检查更新时遇到 UTF-8 BOM 清单会报错的问题；保留 V0.0.4 的主窗口退出确认。"
 }
