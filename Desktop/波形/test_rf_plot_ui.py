@@ -580,6 +580,9 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertIn("scheduleStartupUpdateCheck", html)
         self.assertIn("showUpdateModal", html)
 
+    def test_run_gui_enables_main_window_close_confirmation(self) -> None:
+        self.assertIn("confirm_close=True", Path("rf_plot_ui.py").read_text(encoding="utf-8"))
+
     def test_rfplottool_spec_embeds_updater_exe(self) -> None:
         spec = Path("RFPlotTool.spec").read_text(encoding="utf-8")
         self.assertIn("dist/updater.exe", spec.replace("\\", "/"))

@@ -36,8 +36,8 @@ from openpyxl.drawing.image import Image as ExcelImage
 
 CSV_PATTERN = "*.csv"
 DEFAULT_OUTPUT_SUBDIR = "output"
-APP_VERSION = "0.0.3"
-APP_DISPLAY_VERSION = "V0.0.3"
+APP_VERSION = "0.0.4"
+APP_DISPLAY_VERSION = "V0.0.4"
 APP_UPDATE_EPOCH = 1
 DEFAULT_UPDATE_MANIFEST_URL = "https://Andrew9896.github.io/RFPlotTool/version.json"
 UPDATE_MANIFEST_URL = os.environ.get("RF_PLOT_TOOL_UPDATE_URL", DEFAULT_UPDATE_MANIFEST_URL).strip()
@@ -1053,6 +1053,7 @@ def run_gui() -> int:
         height=820,
         min_size=(960, 680),
         background_color="#1a1d2e",
+        confirm_close=True,
     )
     api.bind_window(window)
     webview.start(debug=False)
