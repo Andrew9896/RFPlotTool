@@ -13,7 +13,7 @@ import rf_plot_ui
 import updater
 
 
-def write_sample_csv(path: Path, segment_count: int) -> None:
+def write_sample_csv(path: Path, segment_count: int, delimiter: str = ",") -> None:
     header = [
         "Serial Number",
         "Overall Result",
@@ -39,7 +39,7 @@ def write_sample_csv(path: Path, segment_count: int) -> None:
             data = [f"{0.4 + base + i * 0.05:.3f}" for i in range(len(header) - 2)]
             rows.append([f"SN{seg}{r}", "PASS"] + data)
     with path.open("w", newline="", encoding="utf-8") as f:
-        csv.writer(f).writerows(rows)
+        csv.writer(f, delimiter=delimiter).writerows(rows)
 
 
 def replace_csv_cell(path: Path, row_index: int, col_index: int, value: str) -> None:
@@ -71,6 +71,24 @@ class RfPlotUiTests(unittest.TestCase):
         write_sample_csv(self.csv_path, 5)
         data = rf_plot_ui.parse_csv(self.csv_path)
         self.assertEqual(len(data.segments), 5)
+
+    def test_parse_supports_tab_delimited_csv_export(self) -> None:
+        write_sample_csv(self.csv_path, 2, delimiter="\t")
+
+        data = rf_plot_ui.parse_csv(self.csv_path)
+
+        self.assertEqual(len(data.segments), 2)
+        self.assertIn("S11:Ant2(0:0:0)", data.antennas)
+
+    def test_parse_can_keep_only_selected_antenna_columns(self) -> None:
+        write_sample_csv(self.csv_path, 2)
+
+        data = rf_plot_ui.parse_csv(self.csv_path, selected_keys=["S11:Ant8(0:0:0)"])
+
+        self.assertEqual(data.antenna_keys, ["S11:Ant8(0:0:0)"])
+        self.assertEqual(list(data.antennas.keys()), ["S11:Ant8(0:0:0)"])
+        self.assertEqual(len(data.segments[0][0]), 3)
+        self.assertEqual(data.segments[0][0][0], "SN00")
 
     def test_default_group_labels(self) -> None:
         self.assertEqual(rf_plot_ui.default_group_labels(4),
@@ -291,6 +309,19 @@ class RfPlotUiTests(unittest.TestCase):
             "row_index": 1,
         })
         self.assertEqual(result["samples"][-1]["id"], "s1:r1")
+
+    def test_scan_csv_uses_lightweight_metadata_reader(self) -> None:
+        write_sample_csv(self.csv_path, 2)
+        original_parse_csv = rf_plot_ui.parse_csv
+        rf_plot_ui.parse_csv = lambda _path, *args, **kwargs: (_ for _ in ()).throw(AssertionError("full parse used"))
+        try:
+            result = rf_plot_ui.Api().scan_csv({"csv_path": str(self.csv_path)})
+        finally:
+            rf_plot_ui.parse_csv = original_parse_csv
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["segment_count"], 2)
+        self.assertEqual(result["samples"][0]["id"], "s0:r0")
 
     def test_preview_accepts_highlight_sample_id(self) -> None:
         write_sample_csv(self.csv_path, 2)
