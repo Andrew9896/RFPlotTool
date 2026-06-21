@@ -18,9 +18,11 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
+from typing import Callable
 from urllib.request import urlopen
 
 import matplotlib
@@ -29,6 +31,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.collections import LineCollection
 from matplotlib import font_manager
 from openpyxl import Workbook
 from openpyxl.drawing.image import Image as ExcelImage
@@ -36,13 +39,21 @@ from openpyxl.drawing.image import Image as ExcelImage
 
 CSV_PATTERN = "*.csv"
 DEFAULT_OUTPUT_SUBDIR = "output"
-APP_VERSION = "0.0.3"
-APP_DISPLAY_VERSION = "V0.0.3"
+APP_VERSION = "0.0.7"
+APP_DISPLAY_VERSION = "V0.0.7"
 APP_UPDATE_EPOCH = 1
 DEFAULT_UPDATE_MANIFEST_URL = "https://Andrew9896.github.io/RFPlotTool/version.json"
 UPDATE_MANIFEST_URL = os.environ.get("RF_PLOT_TOOL_UPDATE_URL", DEFAULT_UPDATE_MANIFEST_URL).strip()
 UPDATER_EXE_NAME = "updater.exe"
 UPDATE_TIMEOUT_SECONDS = 20
+UPDATE_PROGRESS_LOCK = threading.Lock()
+UPDATE_PROGRESS: dict[str, object] = {
+    "running": False,
+    "stage": "idle",
+    "percent": 0,
+    "message": "",
+    "error": "",
+}
 ANT_PATTERN = re.compile(
     r"^(S\d+):(\w+)\s*\(([^)]+)\)\s*Band:b(\d+)[\s:]+(?:Freq:\s*)?([0-9.]+)\s*M(?:Hz)?\s+Mag$"
 )
@@ -94,6 +105,16 @@ class ParsedData:
     lower_row: list[str]
     segments: list[list[list[str]]]
     antenna_keys: list[str]
+
+
+@dataclass
+class CsvScanMetadata:
+    antennas: dict[str, list[tuple[int, int, float]]]
+    upper_row: list[str]
+    lower_row: list[str]
+    antenna_keys: list[str]
+    segment_count: int
+    samples: list[dict]
 
 
 # ─────────────────────────── 文件辅助 ───────────────────────────
@@ -222,26 +243,60 @@ def file_sha256(path: Path) -> str:
 def fetch_update_manifest(manifest_url: str) -> dict:
     with urlopen(manifest_url, timeout=UPDATE_TIMEOUT_SECONDS) as response:
         payload = response.read()
-    return json.loads(payload.decode("utf-8"))
+    return json.loads(payload.decode("utf-8-sig"))
 
 
-def download_update_file(url: str, destination: Path) -> Path:
+def set_update_progress(stage: str, percent: int, message: str, error: str = "", running: bool = True) -> None:
+    with UPDATE_PROGRESS_LOCK:
+        UPDATE_PROGRESS.update({
+            "running": running,
+            "stage": stage,
+            "percent": max(0, min(100, int(percent))),
+            "message": message,
+            "error": error,
+        })
+
+
+def get_update_progress_snapshot() -> dict:
+    with UPDATE_PROGRESS_LOCK:
+        return dict(UPDATE_PROGRESS)
+
+
+def download_update_file(
+    url: str,
+    destination: Path,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     with urlopen(url, timeout=UPDATE_TIMEOUT_SECONDS) as response:
+        total = 0
+        try:
+            total = int(response.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        downloaded = 0
         with destination.open("wb") as output:
             while True:
                 chunk = response.read(1024 * 1024)
                 if not chunk:
                     break
                 output.write(chunk)
+                downloaded += len(chunk)
+                if progress_callback:
+                    progress_callback(downloaded, total)
     return destination
 
 
-def download_update_with_fallback(download_urls: list[str], destination: Path, expected_sha256: str) -> str:
+def download_update_with_fallback(
+    download_urls: list[str],
+    destination: Path,
+    expected_sha256: str,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> str:
     errors: list[str] = []
     for url in download_urls:
         try:
-            download_update_file(url, destination)
+            download_update_file(url, destination, progress_callback)
             actual_sha256 = file_sha256(destination)
             if actual_sha256 == expected_sha256:
                 return url
@@ -256,8 +311,6 @@ def download_update_with_fallback(download_urls: list[str], destination: Path, e
 def ensure_updater_executable(runtime_dir: Path) -> Path:
     runtime_dir.mkdir(parents=True, exist_ok=True)
     target = runtime_dir / UPDATER_EXE_NAME
-    if target.exists():
-        return target
     bundled = resource_path(UPDATER_EXE_NAME)
     if not bundled.exists():
         raise FileNotFoundError(f"缺少更新器: {bundled}")
@@ -370,56 +423,122 @@ def excel_sheet_name(image_path: Path, used_names: set[str]) -> str:
 # ─────────────────────────── CSV 解析 ───────────────────────────
 
 
-def parse_csv(csv_path: Path) -> ParsedData:
-    if not csv_path.exists():
-        raise FileNotFoundError(f"CSV 文件不存在: {csv_path}")
+def ensure_csv_field_size_limit() -> None:
+    limit = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(limit)
+            return
+        except OverflowError:
+            limit //= 10
 
+
+def detect_csv_delimiter(csv_path: Path) -> str:
+    with csv_path.open("r", newline="", encoding="utf-8-sig", errors="replace") as file:
+        sample = file.read(65536)
+    return "\t" if sample.count("\t") > sample.count(",") else ","
+
+
+def iter_csv_rows(csv_path: Path):
+    ensure_csv_field_size_limit()
+    delimiter = detect_csv_delimiter(csv_path)
     with csv_path.open("r", newline="", encoding="utf-8-sig") as file:
-        rows = list(csv.reader(file))
+        yield from csv.reader(file, delimiter=delimiter)
 
-    header_idx = next((idx for idx, row in enumerate(rows) if row and row[0] == "Serial Number"), None)
-    if header_idx is None:
-        raise ValueError("未找到包含 'Serial Number' 的表头行。")
-    if len(rows) < header_idx + 4:
-        raise ValueError("CSV 结构不完整，缺少 Upper/Lower Limit 或 Measurement Unit 行。")
 
-    header = rows[header_idx]
-    upper_row = rows[header_idx + 1]
-    lower_row = rows[header_idx + 2]
+def read_csv_header(reader) -> tuple[list[str], list[str], list[str]]:
+    for row in reader:
+        if row and row[0] == "Serial Number":
+            try:
+                upper_row = next(reader)
+                lower_row = next(reader)
+                next(reader)
+            except StopIteration as exc:
+                raise ValueError("CSV structure is incomplete: missing limit or unit rows.") from exc
+            return row, upper_row, lower_row
+    raise ValueError("Header row with 'Serial Number' was not found.")
 
+
+def build_antennas(header: list[str], selected_keys: list[str] | None = None) -> dict[str, list[tuple[int, int, float]]]:
     antennas: dict[str, list[tuple[int, int, float]]] = {}
     for idx, name in enumerate(header):
         match = ANT_PATTERN.match(name)
         if not match:
             continue
-        s_param = match.group(1)   # S11, S21 等
-        ant_name = match.group(2)  # Ant2, ANT4_IL 等
-        sub_id = match.group(3)    # 0:0:0 or 0:0:0:0
+        s_param = match.group(1)
+        ant_name = match.group(2)
+        sub_id = match.group(3)
         band = int(match.group(4))
         freq = float(match.group(5))
         key = f"{s_param}:{ant_name}({sub_id})"
         antennas.setdefault(key, []).append((idx, band, freq))
 
     if not antennas:
-        raise ValueError("CSV 中未匹配到任何 SXX:AntX(...)Band 列。")
+        raise ValueError("No SXX:AntX(...)Band columns were found in CSV.")
+    if selected_keys:
+        selected = set(selected_keys)
+        antennas = {key: value for key, value in antennas.items() if key in selected}
+        missing = [key for key in selected_keys if key not in antennas]
+        if missing:
+            raise ValueError(f"Selected antennas do not exist in CSV: {missing}")
+    return antennas
 
-    data_rows = rows[header_idx + 4 :]
+
+def compact_csv_shape(
+    antennas: dict[str, list[tuple[int, int, float]]],
+    antenna_keys: list[str],
+) -> tuple[list[int] | None, dict[str, list[tuple[int, int, float]]]]:
+    if not antenna_keys:
+        return None, antennas
+
+    keep_indices = [0]
+    seen = {0}
+    for key in antenna_keys:
+        for idx, _, _ in antennas[key]:
+            if idx not in seen:
+                keep_indices.append(idx)
+                seen.add(idx)
+    index_map = {old_idx: new_idx for new_idx, old_idx in enumerate(keep_indices)}
+    compact_antennas = {
+        key: [(index_map[idx], band, freq) for idx, band, freq in values]
+        for key, values in antennas.items()
+    }
+    return keep_indices, compact_antennas
+
+
+def compact_row(row: list[str], keep_indices: list[int] | None) -> list[str]:
+    if keep_indices is None:
+        return row
+    return [row[idx] if idx < len(row) else "" for idx in keep_indices]
+
+
+def parse_csv(csv_path: Path, selected_keys: list[str] | None = None) -> ParsedData:
+    if not csv_path.exists():
+        raise FileNotFoundError(f"CSV file does not exist: {csv_path}")
+
+    reader = iter(iter_csv_rows(csv_path))
+    header, upper_row, lower_row = read_csv_header(reader)
+    antennas = build_antennas(header, selected_keys)
+    antenna_keys = sorted(antennas, key=antenna_sort_key)
+    keep_indices, antennas = compact_csv_shape(antennas, antenna_keys if selected_keys else [])
+    upper_row = compact_row(upper_row, keep_indices)
+    lower_row = compact_row(lower_row, keep_indices)
+
     segments: list[list[list[str]]] = []
     current: list[list[str]] = []
-    for row in data_rows:
+    for row in reader:
         if not any(cell.strip() for cell in row):
             if current:
                 segments.append(current)
                 current = []
             continue
-        current.append(row)
+        current.append(compact_row(row, keep_indices))
     if current:
         segments.append(current)
 
     if not segments:
-        raise ValueError("Measurement Unit 行之后未找到任何样本数据。")
+        raise ValueError("No sample rows were found after the Measurement Unit row.")
 
-    antenna_keys = sorted(antennas, key=antenna_sort_key)
     return ParsedData(
         antennas=antennas,
         upper_row=upper_row,
@@ -447,12 +566,12 @@ def limit_signature(data: ParsedData) -> tuple[tuple[str, ...], tuple[str, ...]]
     return upper, lower
 
 
-def parse_csv_group_files(csv_paths: list[Path]) -> ParsedData:
+def parse_csv_group_files(csv_paths: list[Path], selected_keys: list[str] | None = None) -> ParsedData:
     paths = [Path(path) for path in csv_paths if str(path).strip()]
     if not paths:
         raise ValueError("CSV 分组模式下请至少选择一个 CSV 文件。")
 
-    parsed = [parse_csv(path) for path in paths]
+    parsed = [parse_csv(path, selected_keys=selected_keys) for path in paths]
     reference = parsed[0]
     ref_antennas = antenna_signature(reference)
     ref_limits = limit_signature(reference)
@@ -495,7 +614,11 @@ def validate_selection(data: ParsedData, selected: list[str]) -> None:
 
 
 def matrix_for(rows: list[list[str]], items: list[tuple[int, int, float]]) -> np.ndarray:
-    return np.array([[float(row[idx]) for idx, _, _ in items] for row in rows], dtype=float)
+    matrix = np.empty((len(rows), len(items)), dtype=float)
+    for row_idx, row in enumerate(rows):
+        for col_idx, (idx, _, _) in enumerate(items):
+            matrix[row_idx, col_idx] = float(row[idx])
+    return matrix
 
 
 def sample_id_for(segment_idx: int, row_idx: int) -> str:
@@ -517,6 +640,56 @@ def sample_options(data: ParsedData) -> list[dict]:
                 "row_index": row_idx + 1,
             })
     return samples
+
+
+def scan_csv_metadata(csv_path: Path) -> CsvScanMetadata:
+    if not csv_path.exists():
+        raise FileNotFoundError(f"CSV file does not exist: {csv_path}")
+
+    reader = iter(iter_csv_rows(csv_path))
+    header, upper_row, lower_row = read_csv_header(reader)
+    antennas = build_antennas(header)
+    antenna_keys = sorted(antennas, key=antenna_sort_key)
+
+    samples = []
+    segment_idx = 0
+    row_idx = 0
+    in_segment = False
+    segment_count = 0
+    for row in reader:
+        if not any(cell.strip() for cell in row):
+            if in_segment:
+                segment_count += 1
+                segment_idx += 1
+                row_idx = 0
+                in_segment = False
+            continue
+
+        in_segment = True
+        serial_number = row[0].strip() if row else ""
+        base_label = f"Group {segment_idx + 1} / Row {row_idx + 1}"
+        samples.append({
+            "id": sample_id_for(segment_idx, row_idx),
+            "label": f"{base_label} / {serial_number}" if serial_number else base_label,
+            "serial_number": serial_number,
+            "group_index": segment_idx + 1,
+            "row_index": row_idx + 1,
+        })
+        row_idx += 1
+
+    if in_segment:
+        segment_count += 1
+    if segment_count == 0:
+        raise ValueError("No sample rows were found after the Measurement Unit row.")
+
+    return CsvScanMetadata(
+        antennas=antennas,
+        upper_row=upper_row,
+        lower_row=lower_row,
+        antenna_keys=antenna_keys,
+        segment_count=segment_count,
+        samples=samples,
+    )
 
 
 def parse_sample_id(value: str) -> tuple[int, int] | None:
@@ -573,8 +746,9 @@ def draw_chart(
         label = labels.group_labels[idx] if idx < len(labels.group_labels) else f"Group {idx + 1}"
         matrix = matrix_for(segment, items)
         matrices.append(matrix)
-        for values in matrix:
-            ax.plot(freqs, values, color=thin_color, alpha=0.18, linewidth=0.75)
+        if len(matrix):
+            line_segments = [np.column_stack((freqs, values)) for values in matrix]
+            ax.add_collection(LineCollection(line_segments, colors=thin_color, alpha=0.18, linewidths=0.75))
         ax.plot(
             freqs,
             matrix.mean(axis=0),
@@ -680,7 +854,7 @@ def generate_charts(
     labels: ChartLabels,
     highlight_sample_ids: list[str] | None = None,
 ) -> list[Path]:
-    data = parse_csv(csv_path)
+    data = parse_csv(csv_path, selected_keys=selected_keys)
     return generate_charts_for_data(data, output_dir, selected_keys, labels, highlight_sample_ids)
 
 
@@ -780,6 +954,7 @@ class Api:
 
     def __init__(self) -> None:
         self._window = None
+        self._update_thread: threading.Thread | None = None
 
     def bind_window(self, window) -> None:
         self._window = window
@@ -823,7 +998,6 @@ class Api:
     # ---- 在线更新 ----
     def check_update(self, payload: dict | None = None) -> dict:
         payload = payload or {}
-        install = bool(payload.get("install"))
         if not UPDATE_MANIFEST_URL:
             return {"ok": False, "error": "未配置更新地址，请先设置 UPDATE_MANIFEST_URL"}
 
@@ -839,28 +1013,6 @@ class Api:
                     "current_display_version": APP_DISPLAY_VERSION,
                     "message": "当前已是最新版本",
                 }
-            if not install:
-                return {
-                    "ok": True,
-                    "has_update": True,
-                    "version": manifest["version"],
-                    "display_version": manifest.get("display_version", manifest["version"]),
-                    "current_version": APP_VERSION,
-                    "current_display_version": APP_DISPLAY_VERSION,
-                    "notes": manifest.get("notes", ""),
-                    "message": "发现新版本",
-                }
-
-            download_dir = Path(tempfile.gettempdir()) / "RFPlotTool-updates"
-            source_path = download_dir / f"RFPlotTool-{manifest['version']}.exe"
-            selected_url = download_update_with_fallback(manifest["download_urls"], source_path, manifest["sha256"])
-
-            app_dir = app_base_dir()
-            target_path = Path(sys.executable).resolve() if getattr(sys, "frozen", False) else app_dir / "RFPlotTool.exe"
-            updater_path = ensure_updater_executable(download_dir)
-            launch_updater(updater_path, source_path, target_path)
-            if self._window:
-                self._window.destroy()
             return {
                 "ok": True,
                 "has_update": True,
@@ -869,36 +1021,106 @@ class Api:
                 "current_version": APP_VERSION,
                 "current_display_version": APP_DISPLAY_VERSION,
                 "notes": manifest.get("notes", ""),
-                "download_url": selected_url,
-                "message": "更新已下载，程序将退出并安装新版",
+                "download_urls": manifest["download_urls"],
+                "sha256": manifest["sha256"],
+                "message": "发现新版本",
             }
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
+    def _install_update_worker(self, manifest: dict) -> None:
+        try:
+            download_dir = Path(tempfile.gettempdir()) / "RFPlotTool-updates"
+            source_path = download_dir / f"RFPlotTool-{manifest['version']}.exe"
+
+            def report_download(downloaded: int, total: int) -> None:
+                if total > 0:
+                    percent = min(80, max(1, int(downloaded * 80 / total)))
+                    message = f"正在下载更新 {downloaded / 1024 / 1024:.1f}/{total / 1024 / 1024:.1f} MB"
+                else:
+                    percent = 10
+                    message = f"正在下载更新 {downloaded / 1024 / 1024:.1f} MB"
+                set_update_progress("download", percent, message)
+
+            set_update_progress("download", 1, "正在连接下载服务器...")
+            selected_url = download_update_with_fallback(
+                manifest["download_urls"],
+                source_path,
+                manifest["sha256"],
+                report_download,
+            )
+            set_update_progress("verify", 85, "正在校验更新文件...")
+
+            app_dir = app_base_dir()
+            target_path = Path(sys.executable).resolve() if getattr(sys, "frozen", False) else app_dir / "RFPlotTool.exe"
+            set_update_progress("prepare", 92, "正在准备安装器...")
+            updater_path = ensure_updater_executable(download_dir)
+            set_update_progress("launch", 98, "正在启动安装器...")
+            launch_updater(updater_path, source_path, target_path)
+            set_update_progress(
+                "launch",
+                100,
+                f"更新已下载，程序将退出并安装新版（来源：{selected_url}）",
+                running=False,
+            )
+            if self._window:
+                self._window.destroy()
+        except Exception as exc:
+            set_update_progress("error", 100, "更新失败", str(exc), running=False)
+
     def install_update(self, payload: dict | None = None) -> dict:
         payload = payload or {}
-        payload["install"] = True
-        return self.check_update(payload)
+        if not payload.get("download_urls") or not payload.get("sha256"):
+            checked = self.check_update()
+            if not checked.get("ok") or not checked.get("has_update"):
+                return checked
+            payload = checked
 
-    def data_from_payload(self, payload: dict) -> tuple[ParsedData, Path]:
+        with UPDATE_PROGRESS_LOCK:
+            if bool(UPDATE_PROGRESS.get("running")):
+                return {"ok": False, "error": "已有更新任务正在运行"}
+            UPDATE_PROGRESS.update({
+                "running": True,
+                "stage": "start",
+                "percent": 0,
+                "message": "准备开始更新...",
+                "error": "",
+            })
+
+        self._update_thread = threading.Thread(target=self._install_update_worker, args=(payload,), daemon=True)
+        self._update_thread.start()
+        return {"ok": True, "started": True, "message": "更新已开始"}
+
+    def update_progress(self) -> dict:
+        return {"ok": True, **get_update_progress_snapshot()}
+
+    def data_from_payload(self, payload: dict, selected_keys: list[str] | None = None) -> tuple[ParsedData, Path]:
         if payload.get("group_mode") == "csv_group":
             csv_paths = [Path(path) for path in (payload.get("csv_paths") or []) if str(path).strip()]
-            data = parse_csv_group_files(csv_paths)
+            data = parse_csv_group_files(csv_paths, selected_keys=selected_keys)
             return data, csv_paths[0]
         csv_path = Path(payload.get("csv_path", "").strip())
-        return parse_csv(csv_path), csv_path
+        return parse_csv(csv_path, selected_keys=selected_keys), csv_path
 
     def scan_csv(self, csv_path: str | dict) -> dict:
         try:
             if isinstance(csv_path, dict):
-                data, _ = self.data_from_payload(csv_path)
+                if csv_path.get("group_mode") == "csv_group":
+                    data, _ = self.data_from_payload(csv_path)
+                    metadata = None
+                else:
+                    metadata = scan_csv_metadata(Path(csv_path.get("csv_path", "").strip()))
+                    data = None
             else:
-                data = parse_csv(Path(csv_path))
+                metadata = scan_csv_metadata(Path(csv_path))
+                data = None
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
         antennas = []
-        for key in data.antenna_keys:
+        antenna_keys = metadata.antenna_keys if metadata else data.antenna_keys
+        antenna_map = metadata.antennas if metadata else data.antennas
+        for key in antenna_keys:
             match = ANT_KEY_PATTERN.match(key)
             s_param = match.group(1) if match else ""
             ant_name = match.group(2) if match else key
@@ -908,20 +1130,20 @@ class Api:
                 "s_param": s_param,
                 "ant_name": ant_name,
                 "sub_id": sub_id,
-                "band_count": len(data.antennas[key]),
+                "band_count": len(antenna_map[key]),
             })
         return {
             "ok": True,
-            "segment_count": len(data.segments),
+            "segment_count": metadata.segment_count if metadata else len(data.segments),
             "antennas": antennas,
-            "samples": sample_options(data),
+            "samples": metadata.samples if metadata else sample_options(data),
         }
 
     # ---- 生成图表 ----
     def preview(self, payload: dict) -> dict:
         try:
             antenna_key = (payload.get("antenna_key") or "").strip()
-            data, _ = self.data_from_payload(payload)
+            data, _ = self.data_from_payload(payload, selected_keys=[antenna_key] if antenna_key else None)
             image_bytes = render_preview_png_for_data(
                 data,
                 antenna_key,
@@ -943,12 +1165,12 @@ class Api:
 
     def generate(self, payload: dict) -> dict:
         try:
-            data, source_path = self.data_from_payload(payload)
+            selected = list(payload.get("selected_antennas") or [])
+            data, source_path = self.data_from_payload(payload, selected_keys=selected or None)
             base_output = Path(payload.get("output_dir", "").strip() or default_output_dir())
             # 按 CSV 文件名创建子文件夹
             csv_subfolder = source_path.stem if payload.get("group_mode") != "csv_group" else f"{source_path.stem}_csv_groups"
             output_dir = base_output / csv_subfolder
-            selected = list(payload.get("selected_antennas") or [])
             labels = chart_labels_from_payload(payload)
             outputs = generate_charts_for_data(
                 data,
@@ -1053,6 +1275,7 @@ def run_gui() -> int:
         height=820,
         min_size=(960, 680),
         background_color="#1a1d2e",
+        confirm_close=True,
     )
     api.bind_window(window)
     webview.start(debug=False)
