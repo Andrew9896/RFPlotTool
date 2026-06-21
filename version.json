@@ -1,12 +1,12 @@
 {
-  "version": "0.0.6",
-  "app_version": "0.0.6",
-  "display_version": "V0.0.6",
+  "version": "0.0.7",
+  "app_version": "0.0.7",
+  "display_version": "V0.0.7",
   "epoch": 1,
-  "url": "https://gitee.com/andrewstephy/rfplot-tool/releases/download/v0.0.6/RFPlotTool.exe",
+  "url": "https://gitee.com/andrewstephy/rfplot-tool/releases/download/v0.0.7/RFPlotTool.exe",
   "mirrors": [
-    "https://github.com/Andrew9896/RFPlotTool/releases/download/v0.0.6/RFPlotTool.exe"
+    "https://github.com/Andrew9896/RFPlotTool/releases/download/v0.0.7/RFPlotTool.exe"
   ],
-  "sha256": "15b8f4489caddf8f1cb9540713343fd72a633b86c097bc343559d1ee393b1170",
-  "notes": "V0.0.6：修复临时 updater 缓存损坏导致的 WinError 216；更新下载时增加真实进度条。"
+  "sha256": "278abd76d29413387ac7c9f40c8c9c173d93002b95c121382b257253f9c18330",
+  "notes": "V0.0.7: improved large CSV scanning, selected-antenna parsing, tab-delimited CSV support, and faster batch chart rendering."
 }
