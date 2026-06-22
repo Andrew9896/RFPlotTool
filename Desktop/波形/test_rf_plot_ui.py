@@ -429,6 +429,31 @@ class RfPlotUiTests(unittest.TestCase):
         payload = result["image"].split(",", 1)[1]
         self.assertTrue(base64.b64decode(payload).startswith(b"\x89PNG\r\n\x1a\n"))
 
+    def test_api_summary_preview_returns_png_data_url_for_selected_antennas(self) -> None:
+        write_sample_csv(self.csv_path, 2)
+        result = rf_plot_ui.Api().summary_preview({
+            "csv_path": str(self.csv_path),
+            "selected_antennas": ["S11:Ant2(0:0:0)", "S11:Ant8(0:0:0)"],
+            "overview_title": "View All",
+            "group_colors": ["#123456", "#abcdef"],
+        })
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["antenna"], "View All")
+        self.assertTrue(result["image"].startswith("data:image/png;base64,"))
+        payload = result["image"].split(",", 1)[1]
+        self.assertTrue(base64.b64decode(payload).startswith(b"\x89PNG\r\n\x1a\n"))
+
+    def test_api_summary_preview_requires_selected_antennas(self) -> None:
+        write_sample_csv(self.csv_path, 2)
+        result = rf_plot_ui.Api().summary_preview({
+            "csv_path": str(self.csv_path),
+            "selected_antennas": [],
+        })
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("请至少勾选一个天线", result["error"])
+
     def test_api_preview_supports_csv_group_mode(self) -> None:
         csv_a = self.test_dir / "group_a.csv"
         csv_b = self.test_dir / "group_b.csv"
@@ -655,9 +680,19 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertIn('id="preview_modal"', html)
         self.assertIn('id="preview_image"', html)
         self.assertIn('id="btn_close_preview"', html)
+        self.assertIn('id="btn_view_all"', html)
         self.assertIn("openPreviewModal", html)
         self.assertIn("closePreviewModal", html)
         self.assertIn("api().preview", html)
+        self.assertIn("api().summary_preview", html)
+
+    def test_webui_preview_modal_supports_arrow_key_navigation(self) -> None:
+        html = Path("webui.html").read_text(encoding="utf-8")
+        self.assertIn("previewAntennaKey", html)
+        self.assertIn("function previewAdjacentAntenna", html)
+        self.assertIn('event.key === "ArrowLeft"', html)
+        self.assertIn('event.key === "ArrowRight"', html)
+        self.assertIn("previewAntenna(nextKey)", html)
 
     def test_webui_group_labels_include_color_picker_and_payload(self) -> None:
         html = Path("webui.html").read_text(encoding="utf-8")

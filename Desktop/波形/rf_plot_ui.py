@@ -45,8 +45,8 @@ CSV_PATTERN = "*.csv"
 DEFAULT_OUTPUT_SUBDIR = "output"
 DEFAULT_SPC_ROOT = os.environ.get("RF_PLOT_TOOL_SPC_ROOT", "Z:\\").strip() or "Z:\\"
 SPC_SNAPSHOT_SUBDIR = "RFPlotTool-spc-snapshots"
-APP_VERSION = "0.0.8"
-APP_DISPLAY_VERSION = "V0.0.8"
+APP_VERSION = "0.0.9"
+APP_DISPLAY_VERSION = "V0.0.9"
 APP_UPDATE_EPOCH = 1
 DEFAULT_UPDATE_MANIFEST_URL = "https://Andrew9896.github.io/RFPlotTool/version.json"
 UPDATE_MANIFEST_URL = os.environ.get("RF_PLOT_TOOL_UPDATE_URL", DEFAULT_UPDATE_MANIFEST_URL).strip()
@@ -1114,6 +1114,55 @@ def summary_layout(count: int) -> tuple[int, int]:
     return (rows, cols)
 
 
+def draw_summary_figure(
+    data: ParsedData,
+    selected_keys: list[str],
+    labels: ChartLabels,
+    highlight_sample_ids: list[str] | None = None,
+) -> plt.Figure:
+    if not selected_keys:
+        raise ValueError("请至少勾选一个天线。")
+
+    configure_fonts()
+    validate_selection(data, selected_keys)
+    labels = labels_for_segment_count(labels, len(data.segments))
+    rows, cols = summary_layout(len(selected_keys))
+    fig_w = max(8.0, cols * 7.0)
+    fig_h = max(6.0, rows * 5.0)
+    fig, axes = plt.subplots(rows, cols, figsize=(fig_w, fig_h), dpi=140, squeeze=False)
+    fig.suptitle(labels.overview_title, fontsize=18, y=0.99)
+    flat = list(axes.ravel())
+    for ax, key in zip(flat, selected_keys):
+        draw_chart(
+            ax,
+            key,
+            data.antennas[key],
+            data,
+            labels,
+            legend_fontsize=6,
+            highlight_sample_ids=highlight_sample_ids,
+        )
+    for ax in flat[len(selected_keys) :]:
+        ax.axis("off")
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    return fig
+
+
+def render_summary_preview_png_for_data(
+    data: ParsedData,
+    selected_keys: list[str],
+    labels: ChartLabels,
+    highlight_sample_ids: list[str] | None = None,
+) -> bytes:
+    fig = draw_summary_figure(data, selected_keys, labels, highlight_sample_ids)
+    try:
+        buffer = BytesIO()
+        fig.savefig(buffer, format="png")
+        return buffer.getvalue()
+    finally:
+        plt.close(fig)
+
+
 def generate_charts(
     csv_path: Path,
     output_dir: Path,
@@ -1159,25 +1208,7 @@ def generate_charts_for_data(
         plt.close(fig)
         outputs.append(out_path)
 
-    rows, cols = summary_layout(len(selected_keys))
-    fig_w = max(8.0, cols * 7.0)
-    fig_h = max(6.0, rows * 5.0)
-    fig, axes = plt.subplots(rows, cols, figsize=(fig_w, fig_h), dpi=140, squeeze=False)
-    fig.suptitle(labels.overview_title, fontsize=18, y=0.99)
-    flat = list(axes.ravel())
-    for ax, key in zip(flat, selected_keys):
-        draw_chart(
-            ax,
-            key,
-            data.antennas[key],
-            data,
-            labels,
-            legend_fontsize=6,
-            highlight_sample_ids=highlight_sample_ids,
-        )
-    for ax in flat[len(selected_keys) :]:
-        ax.axis("off")
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig = draw_summary_figure(data, selected_keys, labels, highlight_sample_ids)
     summary_path = output_dir / "summary_all_compare.png"
     fig.savefig(summary_path)
     plt.close(fig)
@@ -1464,6 +1495,31 @@ class Api:
             return {
                 "ok": True,
                 "antenna": antenna_key,
+                "image": f"data:image/png;base64,{encoded}",
+            }
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        finally:
+            plt.close("all")
+            import gc
+            gc.collect()
+
+    def summary_preview(self, payload: dict) -> dict:
+        try:
+            selected = list(payload.get("selected_antennas") or [])
+            if not selected:
+                raise ValueError("请至少勾选一个天线。")
+            data, _ = self.data_from_payload(payload, selected_keys=selected or None)
+            image_bytes = render_summary_preview_png_for_data(
+                data,
+                selected,
+                chart_labels_from_payload(payload),
+                highlight_sample_ids=normalize_highlight_sample_ids(payload),
+            )
+            encoded = base64.b64encode(image_bytes).decode("ascii")
+            return {
+                "ok": True,
+                "antenna": "View All",
                 "image": f"data:image/png;base64,{encoded}",
             }
         except Exception as exc:

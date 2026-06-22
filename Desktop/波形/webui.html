@@ -856,6 +856,7 @@
       <div class="panel-header">
         <h2>选择天线</h2>
         <div style="display:flex; gap:6px;">
+          <button class="ghost" id="btn_view_all">View All</button>
           <button class="ghost" id="btn_check_all">全选</button>
           <button class="ghost" id="btn_uncheck_all">全不选</button>
           <button class="ghost" id="btn_rescan">重新扫描</button>
@@ -947,6 +948,7 @@
     segmentCount: 0,
     lastOutputDir: "",
     previewRequestId: 0,
+    previewAntennaKey: "",
     samples: [],
     selectedHighlightSamples: new Set(),
     pendingUpdate: null,
@@ -1293,6 +1295,7 @@
 
   function closePreviewModal() {
     state.previewRequestId += 1;
+    state.previewAntennaKey = "";
     $("preview_modal").classList.remove("show");
   }
 
@@ -1310,6 +1313,7 @@
     }
 
     const requestId = ++state.previewRequestId;
+    state.previewAntennaKey = key;
     openPreviewModal();
     $("preview_name").textContent = key;
     $("preview_image").style.display = "none";
@@ -1346,6 +1350,74 @@
       setPreviewMessage(message, "error");
       setStatus("预览异常: " + message, "error");
     }
+  }
+
+  async function previewAllSelected() {
+    if (getCsvPaths().length === 0) {
+      showToast("提示", "请选择 CSV 文件", "error");
+      return;
+    }
+    if (state.selected.size === 0) {
+      showToast("提示", "请至少勾选一个天线", "error");
+      return;
+    }
+
+    const requestId = ++state.previewRequestId;
+    state.previewAntennaKey = "";
+    openPreviewModal();
+    $("preview_name").textContent = `View All · ${state.selected.size} 个天线`;
+    $("preview_image").style.display = "none";
+    $("preview_message").style.display = "block";
+    $("preview_message").textContent = "总图生成中…";
+    setStatus("总图预览生成中…", "busy");
+    $("btn_view_all").disabled = true;
+
+    const payload = buildDataPayload({
+      overview_title: $("overview_title").value.trim(),
+      upper_limit: $("upper_limit").value.trim(),
+      lower_limit: $("lower_limit").value.trim(),
+      group_labels: getGroupLabels(),
+      group_colors: getGroupColors(),
+      selected_antennas: Array.from(state.selected),
+      highlight_sample_ids: getHighlightSampleIds(),
+    });
+
+    try {
+      const res = await api().summary_preview(payload);
+      if (requestId !== state.previewRequestId) return;
+      if (!res.ok) {
+        setPreviewMessage(res.error, "error");
+        setStatus("总图预览失败: " + res.error, "error");
+        showToast("总图预览失败", res.error, "error");
+        return;
+      }
+      $("preview_name").textContent = `View All · ${state.selected.size} 个天线`;
+      $("preview_message").style.display = "none";
+      $("preview_image").src = res.image;
+      $("preview_image").style.display = "block";
+      setStatus(`已预览总图 · ${state.selected.size} 个天线`, "ok");
+    } catch (err) {
+      if (requestId !== state.previewRequestId) return;
+      const message = String(err.message || err);
+      setPreviewMessage(message, "error");
+      setStatus("总图预览异常: " + message, "error");
+      showToast("总图预览异常", message, "error");
+    } finally {
+      $("btn_view_all").disabled = false;
+    }
+  }
+
+  function previewAdjacentAntenna(direction) {
+    if (!$("preview_modal").classList.contains("show")) return;
+    if (state.antennas.length === 0) return;
+
+    const keys = state.antennas.map((a) => a.key);
+    const currentIndex = keys.indexOf(state.previewAntennaKey);
+    const fallbackIndex = direction > 0 ? -1 : 0;
+    const baseIndex = currentIndex >= 0 ? currentIndex : fallbackIndex;
+    const nextIndex = (baseIndex + direction + keys.length) % keys.length;
+    const nextKey = keys[nextIndex];
+    if (nextKey) previewAntenna(nextKey);
   }
 
   // ---- 天线渲染 ----
@@ -1586,6 +1658,7 @@
   });
 
   $("btn_rescan").addEventListener("click", scanCsv);
+  $("btn_view_all").addEventListener("click", previewAllSelected);
 
   $("btn_check_all").addEventListener("click", () => {
     state.selected = new Set(state.antennas.map((a) => a.key));
@@ -1671,6 +1744,14 @@
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && $("preview_modal").classList.contains("show")) {
       closePreviewModal();
+    }
+    if (event.key === "ArrowLeft" && $("preview_modal").classList.contains("show")) {
+      event.preventDefault();
+      previewAdjacentAntenna(-1);
+    }
+    if (event.key === "ArrowRight" && $("preview_modal").classList.contains("show")) {
+      event.preventDefault();
+      previewAdjacentAntenna(1);
     }
   });
 
