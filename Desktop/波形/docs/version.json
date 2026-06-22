@@ -11,5 +11,5 @@
     "size":  45183205,
     "mandatory":  false,
     "published_at":  "2026-06-22T16:01:00+08:00",
-    "notes":  "V0.0.7: improved large CSV scanning, selected-antenna parsing, tab-delimited CSV support, and faster batch chart rendering.\nV0.0.8: add SPC mode support.\nV0.0.9: add view all support, 方向键图片查看."
+    "notes":  "V0.0.7: improved large CSV scanning, selected-antenna parsing, tab-delimited CSV support, and faster batch chart rendering.\nV0.0.8: add SPC mode support.\nV0.0.9: add View All support and keyboard arrow navigation for image preview."
 }
