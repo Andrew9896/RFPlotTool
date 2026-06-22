@@ -1,12 +1,15 @@
 {
-  "version": "0.0.7",
-  "app_version": "0.0.7",
-  "display_version": "V0.0.7",
+  "version": "0.0.8",
+  "app_version": "0.0.8",
+  "display_version": "V0.0.8",
   "epoch": 1,
-  "url": "https://gitee.com/andrewstephy/rfplot-tool/releases/download/v0.0.7/RFPlotTool.exe",
+  "url": "https://gitee.com/andrewstephy/rfplot-tool/releases/download/v0.0.8/RFPlotTool.exe",
   "mirrors": [
-    "https://github.com/Andrew9896/RFPlotTool/releases/download/v0.0.7/RFPlotTool.exe"
+    "https://github.com/Andrew9896/RFPlotTool/releases/download/v0.0.8/RFPlotTool.exe"
   ],
-  "sha256": "278abd76d29413387ac7c9f40c8c9c173d93002b95c121382b257253f9c18330",
-  "notes": "V0.0.7: improved large CSV scanning, selected-antenna parsing, tab-delimited CSV support, and faster batch chart rendering."
+  "sha256": "ed4db7cd5270784360457d375d042c2e8390d5b2e2a705f08ae98e9ff8bc3500",
+  "size": 45180163,
+  "mandatory": false,
+  "published_at": "2026-06-22T08:53:00+08:00",
+  "notes": "V0.0.7: improved large CSV scanning, selected-antenna parsing, tab-delimited CSV support, and faster batch chart rendering.\nV0.0.8: add SPC mode support."
 }

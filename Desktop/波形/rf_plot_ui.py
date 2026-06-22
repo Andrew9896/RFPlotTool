@@ -15,11 +15,15 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
+from datetime import date, timedelta
+from difflib import SequenceMatcher
 from io import BytesIO
 from pathlib import Path
 from typing import Callable
@@ -39,8 +43,10 @@ from openpyxl.drawing.image import Image as ExcelImage
 
 CSV_PATTERN = "*.csv"
 DEFAULT_OUTPUT_SUBDIR = "output"
-APP_VERSION = "0.0.7"
-APP_DISPLAY_VERSION = "V0.0.7"
+DEFAULT_SPC_ROOT = os.environ.get("RF_PLOT_TOOL_SPC_ROOT", "Z:\\").strip() or "Z:\\"
+SPC_SNAPSHOT_SUBDIR = "RFPlotTool-spc-snapshots"
+APP_VERSION = "0.0.8"
+APP_DISPLAY_VERSION = "V0.0.8"
 APP_UPDATE_EPOCH = 1
 DEFAULT_UPDATE_MANIFEST_URL = "https://Andrew9896.github.io/RFPlotTool/version.json"
 UPDATE_MANIFEST_URL = os.environ.get("RF_PLOT_TOOL_UPDATE_URL", DEFAULT_UPDATE_MANIFEST_URL).strip()
@@ -55,10 +61,22 @@ UPDATE_PROGRESS: dict[str, object] = {
     "error": "",
 }
 ANT_PATTERN = re.compile(
-    r"^(S\d+):(\w+)\s*\(([^)]+)\)\s*Band:b(\d+)[\s:]+(?:Freq:\s*)?([0-9.]+)\s*M(?:Hz)?\s+Mag$"
+    r"^(S\d+):([^()]+?)\s*\(([^)]+)\)\s*Band:b(\d+)[\s:]+(?:Freq:\s*)?([0-9.]+)\s*M(?:Hz)?\s+Mag$"
 )
-ANT_KEY_PATTERN = re.compile(r"^(S\d+):(\w+)\(([^)]+)\)$")
+ANT_KEY_PATTERN = re.compile(r"^(S\d+):(.+?)\(([^)]*)\)$")
+RF_PREFIX_PATTERN = re.compile(r"^\s*(S\d+)\s*[:_\-\s]\s*(.+)$", re.IGNORECASE)
+BAND_PATTERN = re.compile(r"(?:\bBand\s*[:=_\-\s]*b?\s*|\bB\s*)(\d+)\b", re.IGNORECASE)
+FREQ_PATTERN = re.compile(
+    r"\bFreq(?:uency)?\s*[:=_\-\s]*([0-9]+(?:\.[0-9]+)?)\s*([GMK]?Hz|[GMK])?\b",
+    re.IGNORECASE,
+)
+COLON_FREQ_PATTERN = re.compile(
+    r"[:_\-\s]+([0-9]+(?:\.[0-9]+)?)\s*([GMK]?Hz|[GMK])\b",
+    re.IGNORECASE,
+)
+MAG_PATTERN = re.compile(r"\b(?:Mag(?:nitude)?|LogMag|dB|VSWR|Return\s*Loss|ReturnLoss|RL)\b", re.IGNORECASE)
 HEX_COLOR_PATTERN = re.compile(r"^#[0-9a-fA-F]{6}$")
+SERIAL_HEADER_KEYS = {"serialnumber", "serialno", "sn", "barcode", "unitserialnumber"}
 
 SERIES_COLORS: list[tuple[str, str]] = [
     ("#16a34a", "#15803d"),
@@ -443,12 +461,96 @@ def iter_csv_rows(csv_path: Path):
     ensure_csv_field_size_limit()
     delimiter = detect_csv_delimiter(csv_path)
     with csv_path.open("r", newline="", encoding="utf-8-sig") as file:
-        yield from csv.reader(file, delimiter=delimiter)
+        for row in csv.reader(file, delimiter=delimiter):
+            yield row
+
+
+def normalized_header_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def is_serial_header(value: str) -> bool:
+    return normalized_header_key(value) in SERIAL_HEADER_KEYS
+
+
+def normalize_column_name(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def frequency_to_mhz(value: float, unit: str | None) -> float:
+    unit_key = (unit or "MHz").strip().lower()
+    if unit_key in {"g", "ghz"}:
+        return value * 1000.0
+    if unit_key in {"k", "khz"}:
+        return value / 1000.0
+    return value
+
+
+def parse_antenna_column(name: str) -> tuple[str, str, str, int, float] | None:
+    column = normalize_column_name(name)
+    match_column = re.sub(r"[_]+", " ", column)
+    if not column or not MAG_PATTERN.search(match_column):
+        return None
+
+    prefix_match = RF_PREFIX_PATTERN.match(match_column)
+    if not prefix_match:
+        return None
+    s_param = prefix_match.group(1).upper()
+    rest = prefix_match.group(2).strip()
+
+    band_match = BAND_PATTERN.search(rest)
+    if not band_match:
+        return None
+    band = int(band_match.group(1))
+
+    label = rest[:band_match.start()].strip(" :-_")
+    if not label:
+        return None
+    sub_id = "0"
+    sub_match = re.search(r"\(([^)]*)\)\s*$", label)
+    if not sub_match:
+        sub_match = re.search(r"\[([^\]]*)\]\s*$", label)
+    if sub_match:
+        sub_id = sub_match.group(1).strip() or "0"
+        label = label[:sub_match.start()].strip(" :-_")
+    else:
+        trailing_sub = re.search(
+            r"(.+?)[_\s\-]+(?:port|ch|channel|sub)\s*[:=_\-]?\s*(\d+)\s*$",
+            label,
+            re.IGNORECASE,
+        )
+        if not trailing_sub:
+            trailing_sub = re.search(r"(.+?)[_\s]+(\d+)\s*$", label)
+        if trailing_sub:
+            label = trailing_sub.group(1).strip(" :-_")
+            sub_id = trailing_sub.group(2)
+    if not label:
+        return None
+
+    tail = rest[band_match.end():]
+    freq_match = FREQ_PATTERN.search(rest) or COLON_FREQ_PATTERN.search(tail)
+    freq = frequency_to_mhz(float(freq_match.group(1)), freq_match.group(2) if freq_match else None) if freq_match else float(band)
+    return s_param, label, sub_id, band, freq
+
+
+def looks_like_rf_column(name: str) -> bool:
+    column = normalize_column_name(name)
+    return bool(re.search(r"\bS\d+\b", column, re.IGNORECASE) and MAG_PATTERN.search(column))
+
+
+def unrecognized_rf_examples(header: list[str], limit: int = 5) -> list[str]:
+    examples = []
+    for name in header:
+        if looks_like_rf_column(name) and parse_antenna_column(name) is None:
+            examples.append(name)
+        if len(examples) >= limit:
+            break
+    return examples
 
 
 def read_csv_header(reader) -> tuple[list[str], list[str], list[str]]:
     for row in reader:
-        if row and row[0] == "Serial Number":
+        if row and is_serial_header(row[0]):
             try:
                 upper_row = next(reader)
                 lower_row = next(reader)
@@ -456,25 +558,27 @@ def read_csv_header(reader) -> tuple[list[str], list[str], list[str]]:
             except StopIteration as exc:
                 raise ValueError("CSV structure is incomplete: missing limit or unit rows.") from exc
             return row, upper_row, lower_row
-    raise ValueError("Header row with 'Serial Number' was not found.")
+    raise ValueError("Header row with Serial Number/SN/Barcode was not found.")
 
 
 def build_antennas(header: list[str], selected_keys: list[str] | None = None) -> dict[str, list[tuple[int, int, float]]]:
     antennas: dict[str, list[tuple[int, int, float]]] = {}
     for idx, name in enumerate(header):
-        match = ANT_PATTERN.match(name)
-        if not match:
+        parsed = parse_antenna_column(name)
+        if not parsed:
             continue
-        s_param = match.group(1)
-        ant_name = match.group(2)
-        sub_id = match.group(3)
-        band = int(match.group(4))
-        freq = float(match.group(5))
+        s_param, ant_name, sub_id, band, freq = parsed
         key = f"{s_param}:{ant_name}({sub_id})"
         antennas.setdefault(key, []).append((idx, band, freq))
 
     if not antennas:
-        raise ValueError("No SXX:AntX(...)Band columns were found in CSV.")
+        examples = unrecognized_rf_examples(header)
+        if examples:
+            raise ValueError(
+                "No recognized RF Band/Mag columns were found in CSV. "
+                "疑似 RF 列无法识别: " + " | ".join(examples)
+            )
+        raise ValueError("No SXX/S21 Band/Mag columns were found in CSV.")
     if selected_keys:
         selected = set(selected_keys)
         antennas = {key: value for key, value in antennas.items() if key in selected}
@@ -516,28 +620,31 @@ def parse_csv(csv_path: Path, selected_keys: list[str] | None = None) -> ParsedD
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV file does not exist: {csv_path}")
 
-    reader = iter(iter_csv_rows(csv_path))
-    header, upper_row, lower_row = read_csv_header(reader)
-    antennas = build_antennas(header, selected_keys)
-    antenna_keys = sorted(antennas, key=antenna_sort_key)
-    keep_indices, antennas = compact_csv_shape(antennas, antenna_keys if selected_keys else [])
-    upper_row = compact_row(upper_row, keep_indices)
-    lower_row = compact_row(lower_row, keep_indices)
+    reader = iter_csv_rows(csv_path)
+    try:
+        header, upper_row, lower_row = read_csv_header(reader)
+        antennas = build_antennas(header, selected_keys)
+        antenna_keys = sorted(antennas, key=antenna_sort_key)
+        keep_indices, antennas = compact_csv_shape(antennas, antenna_keys if selected_keys else [])
+        upper_row = compact_row(upper_row, keep_indices)
+        lower_row = compact_row(lower_row, keep_indices)
 
-    segments: list[list[list[str]]] = []
-    current: list[list[str]] = []
-    for row in reader:
-        if not any(cell.strip() for cell in row):
-            if current:
-                segments.append(current)
-                current = []
-            continue
-        current.append(compact_row(row, keep_indices))
-    if current:
-        segments.append(current)
+        segments: list[list[list[str]]] = []
+        current: list[list[str]] = []
+        for row in reader:
+            if not any(cell.strip() for cell in row):
+                if current:
+                    segments.append(current)
+                    current = []
+                continue
+            current.append(compact_row(row, keep_indices))
+        if current:
+            segments.append(current)
 
-    if not segments:
-        raise ValueError("No sample rows were found after the Measurement Unit row.")
+        if not segments:
+            raise ValueError("No sample rows were found after the Measurement Unit row.")
+    finally:
+        reader.close()
 
     return ParsedData(
         antennas=antennas,
@@ -646,41 +753,44 @@ def scan_csv_metadata(csv_path: Path) -> CsvScanMetadata:
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV file does not exist: {csv_path}")
 
-    reader = iter(iter_csv_rows(csv_path))
-    header, upper_row, lower_row = read_csv_header(reader)
-    antennas = build_antennas(header)
-    antenna_keys = sorted(antennas, key=antenna_sort_key)
+    reader = iter_csv_rows(csv_path)
+    try:
+        header, upper_row, lower_row = read_csv_header(reader)
+        antennas = build_antennas(header)
+        antenna_keys = sorted(antennas, key=antenna_sort_key)
 
-    samples = []
-    segment_idx = 0
-    row_idx = 0
-    in_segment = False
-    segment_count = 0
-    for row in reader:
-        if not any(cell.strip() for cell in row):
-            if in_segment:
-                segment_count += 1
-                segment_idx += 1
-                row_idx = 0
-                in_segment = False
-            continue
+        samples = []
+        segment_idx = 0
+        row_idx = 0
+        in_segment = False
+        segment_count = 0
+        for row in reader:
+            if not any(cell.strip() for cell in row):
+                if in_segment:
+                    segment_count += 1
+                    segment_idx += 1
+                    row_idx = 0
+                    in_segment = False
+                continue
 
-        in_segment = True
-        serial_number = row[0].strip() if row else ""
-        base_label = f"Group {segment_idx + 1} / Row {row_idx + 1}"
-        samples.append({
-            "id": sample_id_for(segment_idx, row_idx),
-            "label": f"{base_label} / {serial_number}" if serial_number else base_label,
-            "serial_number": serial_number,
-            "group_index": segment_idx + 1,
-            "row_index": row_idx + 1,
-        })
-        row_idx += 1
+            in_segment = True
+            serial_number = row[0].strip() if row else ""
+            base_label = f"Group {segment_idx + 1} / Row {row_idx + 1}"
+            samples.append({
+                "id": sample_id_for(segment_idx, row_idx),
+                "label": f"{base_label} / {serial_number}" if serial_number else base_label,
+                "serial_number": serial_number,
+                "group_index": segment_idx + 1,
+                "row_index": row_idx + 1,
+            })
+            row_idx += 1
 
-    if in_segment:
-        segment_count += 1
-    if segment_count == 0:
-        raise ValueError("No sample rows were found after the Measurement Unit row.")
+        if in_segment:
+            segment_count += 1
+        if segment_count == 0:
+            raise ValueError("No sample rows were found after the Measurement Unit row.")
+    finally:
+        reader.close()
 
     return CsvScanMetadata(
         antennas=antennas,
@@ -690,6 +800,163 @@ def scan_csv_metadata(csv_path: Path) -> CsvScanMetadata:
         segment_count=segment_count,
         samples=samples,
     )
+
+
+def directory_result(path: Path) -> dict:
+    stat = path.stat()
+    return {
+        "name": path.name,
+        "path": str(path),
+        "modified": stat.st_mtime,
+    }
+
+
+def normalized_resource_code(value: str) -> str:
+    return re.sub(r"\s+", "", str(value or "")).upper()
+
+
+def spc_resource_similarity(query: str, candidate: str) -> float:
+    query_code = normalized_resource_code(query)
+    candidate_code = normalized_resource_code(candidate)
+    if not query_code or not candidate_code:
+        return 0.0
+    if query_code == candidate_code:
+        return 2.0
+    if query_code in candidate_code:
+        return 1.0 + len(query_code) / max(len(candidate_code), 1)
+    if candidate_code in query_code:
+        return 1.0 + len(candidate_code) / max(len(query_code), 1)
+    return SequenceMatcher(None, query_code, candidate_code).ratio()
+
+
+def search_spc_resources(spc_root: Path | str, query: str, limit: int = 50) -> list[dict]:
+    root = Path(str(spc_root or DEFAULT_SPC_ROOT).strip())
+    if not root.exists():
+        raise FileNotFoundError(f"SPC root does not exist: {root}")
+    if not root.is_dir():
+        raise NotADirectoryError(f"SPC root is not a directory: {root}")
+
+    resource_code = normalized_resource_code(query)
+    if not resource_code:
+        return []
+    resource = root / resource_code
+    if resource.exists() and resource.is_dir():
+        return [directory_result(resource)]
+    return []
+
+
+def suggest_spc_resources(spc_root: Path | str, query: str, limit: int = 5) -> list[dict]:
+    root = Path(str(spc_root or DEFAULT_SPC_ROOT).strip())
+    if not root.exists():
+        raise FileNotFoundError(f"SPC root does not exist: {root}")
+    if not root.is_dir():
+        raise NotADirectoryError(f"SPC root is not a directory: {root}")
+
+    query_code = normalized_resource_code(query)
+    if not query_code:
+        return []
+
+    scored: list[tuple[float, str, Path]] = []
+    with os.scandir(root) as entries:
+        for entry in entries:
+            try:
+                if not entry.is_dir():
+                    continue
+            except OSError:
+                continue
+            score = spc_resource_similarity(query_code, entry.name)
+            if score >= 0.58:
+                scored.append((score, entry.name, Path(entry.path)))
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [directory_result(path) for _, _, path in scored[:limit]]
+
+
+def list_spc_dates(
+    resource_path: Path | str,
+    limit: int | None = None,
+    recent_days: int = 15,
+    include_all: bool = False,
+) -> list[dict]:
+    resource = Path(str(resource_path or "").strip())
+    if not resource.exists():
+        raise FileNotFoundError(f"SPC resource path does not exist: {resource}")
+    if not resource.is_dir():
+        raise NotADirectoryError(f"SPC resource path is not a directory: {resource}")
+
+    if not include_all:
+        today = date.today()
+        days = max(1, int(recent_days or 15))
+        dates = []
+        for offset in range(days):
+            child = resource / (today - timedelta(days=offset)).strftime("%Y%m%d")
+            if child.is_dir():
+                dates.append(directory_result(child))
+        return dates
+
+    dates = [
+        directory_result(child)
+        for child in resource.iterdir()
+        if child.is_dir() and re.fullmatch(r"\d{8}", child.name)
+    ]
+    dates = sorted(dates, key=lambda item: item["name"], reverse=True)
+    return dates[:limit] if limit is not None else dates
+
+
+def find_largest_spc_csv(date_path: Path | str) -> Path:
+    date_dir = Path(str(date_path or "").strip())
+    if not date_dir.exists():
+        raise FileNotFoundError(f"SPC date path does not exist: {date_dir}")
+    if not date_dir.is_dir():
+        raise NotADirectoryError(f"SPC date path is not a directory: {date_dir}")
+
+    largest: tuple[int, float, Path] | None = None
+    for path in date_dir.rglob("*"):
+        try:
+            if not path.is_file() or path.suffix.lower() != ".csv":
+                continue
+            stat = path.stat()
+        except OSError:
+            continue
+        candidate = (int(stat.st_size), float(stat.st_mtime), path)
+        if largest is None or candidate[:2] > largest[:2]:
+            largest = candidate
+
+    if largest is None:
+        raise FileNotFoundError(f"No CSV file was found under SPC date path: {date_dir}")
+    return largest[2]
+
+
+def copy_spc_csv_for_read(source_csv: Path | str) -> Path:
+    source = Path(str(source_csv or "").strip())
+    if not source.exists():
+        raise FileNotFoundError(f"SPC CSV does not exist: {source}")
+    if not source.is_file():
+        raise FileNotFoundError(f"SPC CSV is not a file: {source}")
+
+    snapshot_dir = Path(tempfile.gettempdir()) / SPC_SNAPSHOT_SUBDIR
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d%H%M%S")
+    safe_name = safe_filename(source.stem) or "spc_csv"
+    target = snapshot_dir / f"{safe_name}_{stamp}_{threading.get_ident()}.csv"
+    with source.open("rb") as src, target.open("wb") as dst:
+        shutil.copyfileobj(src, dst, length=1024 * 1024)
+    return target
+
+
+def resolve_spc_csv_snapshot(payload: dict) -> tuple[Path, Path]:
+    snapshot_value = str(payload.get("spc_snapshot_csv") or "").strip()
+    source_value = str(payload.get("spc_source_csv") or "").strip()
+    if snapshot_value:
+        snapshot = Path(snapshot_value)
+        if not snapshot.exists():
+            raise FileNotFoundError(f"SPC CSV snapshot does not exist: {snapshot}")
+        source = Path(source_value) if source_value else snapshot
+        return source, snapshot
+
+    date_path = Path(str(payload.get("spc_date_path") or "").strip())
+    source = find_largest_spc_csv(date_path)
+    return source, copy_spc_csv_for_read(source)
 
 
 def parse_sample_id(value: str) -> tuple[int, int] | None:
@@ -990,9 +1257,34 @@ class Api:
         return {
             "ok": True,
             "output_dir": str(default_output_dir()),
+            "spc_root": DEFAULT_SPC_ROOT,
             "version": APP_VERSION,
             "display_version": APP_DISPLAY_VERSION,
         }
+
+    def search_spc_resources(self, payload: dict) -> dict:
+        try:
+            root = payload.get("spc_root") or DEFAULT_SPC_ROOT
+            query = payload.get("query") or ""
+            resources = search_spc_resources(
+                root,
+                query,
+            )
+            suggestions = [] if resources else suggest_spc_resources(root, query)
+            return {"ok": True, "resources": resources, "suggestions": suggestions}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def list_spc_dates(self, payload: dict) -> dict:
+        try:
+            include_all = bool(payload.get("include_all"))
+            dates = list_spc_dates(
+                payload.get("spc_resource_path") or "",
+                include_all=include_all,
+            )
+            return {"ok": True, "dates": dates}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     # ---- 扫描 CSV ----
     # ---- 在线更新 ----
@@ -1099,6 +1391,10 @@ class Api:
             csv_paths = [Path(path) for path in (payload.get("csv_paths") or []) if str(path).strip()]
             data = parse_csv_group_files(csv_paths, selected_keys=selected_keys)
             return data, csv_paths[0]
+        if payload.get("group_mode") == "spc":
+            source_csv, snapshot_csv = resolve_spc_csv_snapshot(payload)
+            data = parse_csv(snapshot_csv, selected_keys=selected_keys)
+            return data, source_csv
         csv_path = Path(payload.get("csv_path", "").strip())
         return parse_csv(csv_path, selected_keys=selected_keys), csv_path
 
@@ -1108,12 +1404,22 @@ class Api:
                 if csv_path.get("group_mode") == "csv_group":
                     data, _ = self.data_from_payload(csv_path)
                     metadata = None
+                    source_csv = None
+                    snapshot_csv = None
+                elif csv_path.get("group_mode") == "spc":
+                    source_csv, snapshot_csv = resolve_spc_csv_snapshot(csv_path)
+                    metadata = scan_csv_metadata(snapshot_csv)
+                    data = None
                 else:
                     metadata = scan_csv_metadata(Path(csv_path.get("csv_path", "").strip()))
                     data = None
+                    source_csv = None
+                    snapshot_csv = None
             else:
                 metadata = scan_csv_metadata(Path(csv_path))
                 data = None
+                source_csv = None
+                snapshot_csv = None
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
@@ -1132,12 +1438,16 @@ class Api:
                 "sub_id": sub_id,
                 "band_count": len(antenna_map[key]),
             })
-        return {
+        result = {
             "ok": True,
             "segment_count": metadata.segment_count if metadata else len(data.segments),
             "antennas": antennas,
             "samples": metadata.samples if metadata else sample_options(data),
         }
+        if source_csv and snapshot_csv:
+            result["source_csv"] = str(source_csv)
+            result["snapshot_csv"] = str(snapshot_csv)
+        return result
 
     # ---- 生成图表 ----
     def preview(self, payload: dict) -> dict:

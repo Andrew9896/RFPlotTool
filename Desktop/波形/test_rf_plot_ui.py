@@ -5,6 +5,7 @@ import base64
 import shutil
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -79,6 +80,154 @@ class RfPlotUiTests(unittest.TestCase):
 
         self.assertEqual(len(data.segments), 2)
         self.assertIn("S11:Ant2(0:0:0)", data.antennas)
+
+    def test_parse_accepts_hyphenated_station_antenna_names(self) -> None:
+        rows = [
+            ["SWVersion:test", "LimitFile:test", "", ""],
+            [
+                "Serial Number",
+                "Overall Result",
+                "S11:IFV1-S11 (0) Band:b1 Freq: 10.0 MHz Mag",
+                "S11:IFV1-S11 (0) Band:b2 Freq: 85.0 MHz Mag",
+            ],
+            ["Upper Limits----->", "", "1.0", "1.0"],
+            ["Lower Limits----->", "", "0.1", "0.1"],
+            ["Measurement Unit----->", "", "", ""],
+            ["SN01", "PASS", "0.5", "0.6"],
+        ]
+        with self.csv_path.open("w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerows(rows)
+
+        data = rf_plot_ui.parse_csv(self.csv_path)
+
+        self.assertIn("S11:IFV1-S11(0)", data.antennas)
+        self.assertEqual(data.antennas["S11:IFV1-S11(0)"], [(2, 1, 10.0), (3, 2, 85.0)])
+
+    def test_parse_accepts_sn_header_alias(self) -> None:
+        rows = [
+            ["SWVersion:test", "LimitFile:test", "", ""],
+            ["SN", "Overall Result", "S11:IFV1-S11 (0) Band:b1 Freq: 10.0 MHz Mag"],
+            ["Upper Limits----->", "", "1.0"],
+            ["Lower Limits----->", "", "0.1"],
+            ["Measurement Unit----->", "", ""],
+            ["SN01", "PASS", "0.5"],
+        ]
+        with self.csv_path.open("w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerows(rows)
+
+        data = rf_plot_ui.parse_csv(self.csv_path)
+
+        self.assertEqual(data.segments[0][0][0], "SN01")
+        self.assertIn("S11:IFV1-S11(0)", data.antennas)
+
+    def test_parse_uses_band_as_frequency_when_column_has_no_freq(self) -> None:
+        rows = [
+            ["SWVersion:test", "LimitFile:test", "", ""],
+            ["Serial Number", "Overall Result", "S11:IFV1-S11 (0) Band:b1 Mag", "S11:IFV1-S11 (0) Band:b2 Mag"],
+            ["Upper Limits----->", "", "1.0", "1.0"],
+            ["Lower Limits----->", "", "0.1", "0.1"],
+            ["Measurement Unit----->", "", "", ""],
+            ["SN01", "PASS", "0.5", "0.6"],
+        ]
+        with self.csv_path.open("w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerows(rows)
+
+        data = rf_plot_ui.parse_csv(self.csv_path)
+
+        self.assertEqual(data.antennas["S11:IFV1-S11(0)"], [(2, 1, 1.0), (3, 2, 2.0)])
+
+    def test_parse_accepts_underscore_rf_column_format(self) -> None:
+        rows = [
+            ["SWVersion:test", "LimitFile:test", "", ""],
+            [
+                "Serial Number",
+                "Overall Result",
+                "S11_IFV1-S11_0_Band1_500MHz_Magnitude",
+                "S11_IFV1-S11_0_Band2_600MHz_Magnitude",
+            ],
+            ["Upper Limits----->", "", "1.0", "1.0"],
+            ["Lower Limits----->", "", "0.1", "0.1"],
+            ["Measurement Unit----->", "", "", ""],
+            ["SN01", "PASS", "0.5", "0.6"],
+        ]
+        with self.csv_path.open("w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerows(rows)
+
+        data = rf_plot_ui.parse_csv(self.csv_path)
+
+        self.assertEqual(data.antennas["S11:IFV1-S11(0)"], [(2, 1, 500.0), (3, 2, 600.0)])
+
+    def test_parse_accepts_short_band_and_db_columns(self) -> None:
+        rows = [
+            ["SWVersion:test", "LimitFile:test", "", ""],
+            [
+                "Serial Number",
+                "Overall Result",
+                "S21 IFH-S43 [0] B1 10MHz dB",
+                "S21 IFH-S43 [0] B2 85MHz dB",
+            ],
+            ["Upper Limits----->", "", "1.0", "1.0"],
+            ["Lower Limits----->", "", "0.1", "0.1"],
+            ["Measurement Unit----->", "", "", ""],
+            ["SN01", "PASS", "0.5", "0.6"],
+        ]
+        with self.csv_path.open("w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerows(rows)
+
+        data = rf_plot_ui.parse_csv(self.csv_path)
+
+        self.assertEqual(data.antennas["S21:IFH-S43(0)"], [(2, 1, 10.0), (3, 2, 85.0)])
+
+    def test_parse_antenna_column_accepts_common_separator_variants(self) -> None:
+        cases = {
+            "S11-Ant2(0)-Band-b3-Freq-2400-Mag": ("S11", "Ant2", "0", 3, 2400.0),
+            "S22:ANT MAIN Port1 Band 7 Frequency=1850 MHz Magnitude": ("S22", "ANT MAIN", "1", 7, 1850.0),
+            "S11 ANT2 CH2 B12 2450MHz dB": ("S11", "ANT2", "2", 12, 2450.0),
+            "S11 Ant2 Band b1 Mag": ("S11", "Ant2", "0", 1, 1.0),
+            "S11:ANT1(0) Band:b1 Freq:2.4GHz VSWR": ("S11", "ANT1", "0", 1, 2400.0),
+            "S11:ANT1(0) Band:b2 Freq:900MHz ReturnLoss": ("S11", "ANT1", "0", 2, 900.0),
+        }
+
+        for column, expected in cases.items():
+            with self.subTest(column=column):
+                self.assertEqual(rf_plot_ui.parse_antenna_column(column), expected)
+
+    def test_scan_csv_metadata_splits_hyphenated_antenna_key(self) -> None:
+        rows = [
+            ["SWVersion:test", "LimitFile:test", "", ""],
+            ["Serial Number", "Overall Result", "S11:IFV1-S11 (0) Band:b1 Freq: 10.0 MHz Mag"],
+            ["Upper Limits----->", "", "1.0"],
+            ["Lower Limits----->", "", "0.1"],
+            ["Measurement Unit----->", "", ""],
+            ["SN01", "PASS", "0.5"],
+        ]
+        with self.csv_path.open("w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerows(rows)
+
+        result = rf_plot_ui.Api().scan_csv({"csv_path": str(self.csv_path)})
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["antennas"][0]["s_param"], "S11")
+        self.assertEqual(result["antennas"][0]["ant_name"], "IFV1-S11")
+        self.assertEqual(result["antennas"][0]["sub_id"], "0")
+
+    def test_scan_csv_reports_unrecognized_rf_column_examples(self) -> None:
+        rows = [
+            ["SWVersion:test", "LimitFile:test", ""],
+            ["Serial Number", "Overall Result", "S11 malformed RF Mag"],
+            ["Upper Limits----->", "", "1.0"],
+            ["Lower Limits----->", "", "0.1"],
+            ["Measurement Unit----->", "", ""],
+            ["SN01", "PASS", "0.5"],
+        ]
+        with self.csv_path.open("w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerows(rows)
+
+        result = rf_plot_ui.Api().scan_csv({"csv_path": str(self.csv_path)})
+
+        self.assertFalse(result["ok"], result)
+        self.assertIn("疑似 RF 列", result["error"])
+        self.assertIn("S11 malformed RF Mag", result["error"])
 
     def test_parse_can_keep_only_selected_antenna_columns(self) -> None:
         write_sample_csv(self.csv_path, 2)
@@ -323,6 +472,111 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertEqual(result["segment_count"], 2)
         self.assertEqual(result["samples"][0]["id"], "s0:r0")
 
+    def test_search_spc_resources_uses_exact_resource_code_without_scanning_siblings(self) -> None:
+        root = self.test_dir / "spc"
+        (root / "ZDS3UAT2VSWR0001").mkdir(parents=True)
+        (root / "ZDS3UAT2VSWR0008").mkdir()
+        (root / "ZDS3UAT2ICT0013").mkdir()
+
+        matches = rf_plot_ui.search_spc_resources(root, "ZDS3UAT2VSWR0001")
+
+        self.assertEqual([item["name"] for item in matches], ["ZDS3UAT2VSWR0001"])
+
+    def test_search_spc_resources_does_not_fallback_to_fuzzy_matches(self) -> None:
+        root = self.test_dir / "spc"
+        (root / "ZDS3UAT2VSWR0001").mkdir(parents=True)
+
+        matches = rf_plot_ui.search_spc_resources(root, "S3UAT2VSWR")
+
+        self.assertEqual(matches, [])
+
+    def test_api_search_spc_resources_suggests_similar_codes_when_exact_missing(self) -> None:
+        root = self.test_dir / "spc"
+        (root / "ZDS4DURANVSWR0004").mkdir(parents=True)
+        (root / "ZDS4DURANICT0003").mkdir()
+        (root / "OTHERRESOURCE0001").mkdir()
+
+        result = rf_plot_ui.Api().search_spc_resources({
+            "spc_root": str(root),
+            "query": "ZDS4DURANVSWR0003",
+        })
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["resources"], [])
+        self.assertEqual(result["suggestions"][0]["name"], "ZDS4DURANVSWR0004")
+
+    def test_list_spc_dates_returns_date_folders_newest_first(self) -> None:
+        resource = self.test_dir / "spc" / "ZDS3UAT2VSWR0001"
+        for name in ["20260618", "notes", "20260620"]:
+            (resource / name).mkdir(parents=True)
+
+        dates = rf_plot_ui.list_spc_dates(resource, include_all=True)
+
+        self.assertEqual([item["name"] for item in dates], ["20260620", "20260618"])
+
+    def test_list_spc_dates_defaults_to_recent_15_days(self) -> None:
+        resource = self.test_dir / "spc" / "ZDS3UAT2VSWR0001"
+        today = date.today()
+        recent = today.strftime("%Y%m%d")
+        boundary = (today - timedelta(days=14)).strftime("%Y%m%d")
+        old = (today - timedelta(days=15)).strftime("%Y%m%d")
+        for name in [old, boundary, recent]:
+            (resource / name).mkdir(parents=True)
+
+        dates = rf_plot_ui.list_spc_dates(resource)
+
+        self.assertEqual([item["name"] for item in dates], [recent, boundary])
+
+    def test_list_spc_dates_include_all_returns_older_dates(self) -> None:
+        resource = self.test_dir / "spc" / "ZDS3UAT2VSWR0001"
+        today = date.today()
+        recent = today.strftime("%Y%m%d")
+        old = (today - timedelta(days=40)).strftime("%Y%m%d")
+        for name in [old, recent]:
+            (resource / name).mkdir(parents=True)
+
+        dates = rf_plot_ui.list_spc_dates(resource, include_all=True)
+
+        self.assertEqual([item["name"] for item in dates], [recent, old])
+
+    def test_spc_csv_snapshot_uses_largest_recursive_csv(self) -> None:
+        date_dir = self.test_dir / "spc" / "ZDS3UAT2VSWR0001" / "20260620"
+        nested = date_dir / "Production Mode" / "nested"
+        nested.mkdir(parents=True)
+        small_csv = date_dir / "small.csv"
+        large_csv = nested / "large.csv"
+        small_csv.write_text("tiny\n", encoding="utf-8")
+        large_csv.write_text("large-content\n" * 20, encoding="utf-8")
+
+        selected = rf_plot_ui.find_largest_spc_csv(date_dir)
+        snapshot = rf_plot_ui.copy_spc_csv_for_read(selected)
+
+        self.assertEqual(selected, large_csv)
+        self.assertTrue(snapshot.exists())
+        self.assertNotEqual(snapshot, large_csv)
+        self.assertEqual(snapshot.read_text(encoding="utf-8"), large_csv.read_text(encoding="utf-8"))
+
+    def test_scan_csv_supports_spc_mode_with_snapshot_copy(self) -> None:
+        root = self.test_dir / "spc"
+        date_dir = root / "ZDS3UAT2VSWR0001" / "20260620"
+        nested = date_dir / "Production Mode"
+        nested.mkdir(parents=True)
+        source_csv = nested / "source.csv"
+        write_sample_csv(source_csv, 2)
+
+        result = rf_plot_ui.Api().scan_csv({
+            "group_mode": "spc",
+            "spc_root": str(root),
+            "spc_resource_path": str(root / "ZDS3UAT2VSWR0001"),
+            "spc_date_path": str(date_dir),
+        })
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["segment_count"], 2)
+        self.assertEqual(result["source_csv"], str(source_csv))
+        self.assertNotEqual(result["snapshot_csv"], str(source_csv))
+        self.assertTrue(Path(result["snapshot_csv"]).exists())
+
     def test_preview_accepts_highlight_sample_id(self) -> None:
         write_sample_csv(self.csv_path, 2)
 
@@ -419,6 +673,22 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertIn("getCsvPaths()", html)
         self.assertIn("group_mode: getGroupMode()", html)
         self.assertIn("csv_paths: getCsvPaths()", html)
+
+    def test_webui_has_spc_mode_controls_and_payload(self) -> None:
+        html = Path("webui.html").read_text(encoding="utf-8")
+        self.assertIn('value="spc"', html)
+        self.assertIn('id="spc_root"', html)
+        self.assertIn('id="btn_pick_spc_root"', html)
+        self.assertIn('id="spc_query"', html)
+        self.assertNotIn('id="spc_resource_results"', html)
+        self.assertIn('id="spc_date_results"', html)
+        self.assertIn('id="btn_load_all_spc_dates"', html)
+        self.assertIn("include_all:", html)
+        self.assertIn("renderSpcSuggestions", html)
+        self.assertIn("suggestions", html)
+        self.assertIn("spc_root:", html)
+        self.assertIn("spc_resource_path:", html)
+        self.assertIn("spc_date_path:", html)
 
     def test_validate_selection_rejects_missing_data(self) -> None:
         write_sample_csv(self.csv_path, 2)

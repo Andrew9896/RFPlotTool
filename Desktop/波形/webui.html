@@ -154,6 +154,58 @@
     display: none;
   }
 
+  .spc-section {
+    display: none;
+  }
+
+  .spc-results {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 160px;
+    overflow-y: auto;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 8px;
+    background: rgba(0, 0, 0, 0.16);
+  }
+
+  .spc-date-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+  }
+
+  .spc-date-header label {
+    margin-bottom: 0;
+  }
+
+  .spc-hint {
+    padding: 8px 10px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .spc-result {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: var(--text-dim);
+    background: rgba(255,255,255,0.035);
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .spc-result:hover,
+  .spc-result.selected {
+    border-color: var(--accent);
+    color: var(--text);
+    background: rgba(99, 102, 241, 0.18);
+  }
+
   .csv-group-rows {
     display: flex;
     flex-direction: column;
@@ -712,6 +764,7 @@
           <div class="mode-switch">
             <label><input type="radio" name="group_mode" value="default" checked /> 默认分组</label>
             <label><input type="radio" name="group_mode" value="csv_group" /> CSV 分组</label>
+            <label><input type="radio" name="group_mode" value="spc" /> SPC 模式</label>
           </div>
         </div>
 
@@ -729,6 +782,32 @@
           <div style="margin-top:8px;">
             <button class="ghost" id="btn_add_csv_group">添加 CSV</button>
           </div>
+        </div>
+
+        <div class="spc-section" id="spc_section">
+          <div class="form-row">
+            <label>SPC 根目录</label>
+            <div class="input-group">
+              <input type="text" id="spc_root" value="Z:\" />
+              <button class="ghost" id="btn_pick_spc_root" type="button">浏览</button>
+            </div>
+          </div>
+          <div class="form-row">
+            <label>资源码</label>
+            <div class="input-group">
+              <input type="text" id="spc_query" placeholder="输入完整资源码，例如 ZDS3UAT2VSWR0001" />
+              <button class="ghost" id="btn_search_spc" type="button">加载</button>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="spc-date-header">
+              <label>日期文件夹</label>
+              <button class="ghost" id="btn_load_all_spc_dates" type="button">加载全部</button>
+            </div>
+            <div id="spc_date_results" class="spc-results"></div>
+          </div>
+          <input type="hidden" id="spc_resource_path" />
+          <input type="hidden" id="spc_date_path" />
         </div>
 
         <div class="form-row">
@@ -873,6 +952,8 @@
     pendingUpdate: null,
     startupUpdateChecked: false,
     updateProgressTimer: null,
+    spcSourceCsv: "",
+    spcSnapshotCsv: "",
   };
 
   // ---- 状态栏 ----
@@ -1021,6 +1102,9 @@
   }
 
   function getCsvPaths() {
+    if (getGroupMode() === "spc") {
+      return state.spcSnapshotCsv ? [state.spcSnapshotCsv] : [];
+    }
     if (getGroupMode() === "csv_group") {
       return Array.from(document.querySelectorAll(".csv-group-path"))
         .map((input) => input.value.trim())
@@ -1035,14 +1119,21 @@
       group_mode: getGroupMode(),
       csv_path: $("csv_path").value.trim(),
       csv_paths: getCsvPaths(),
+      spc_root: $("spc_root").value.trim(),
+      spc_resource_path: $("spc_resource_path").value.trim(),
+      spc_date_path: $("spc_date_path").value.trim(),
+      spc_source_csv: state.spcSourceCsv,
+      spc_snapshot_csv: state.spcSnapshotCsv,
       ...extra,
     };
   }
 
   function updateGroupModeUI() {
     const csvGroup = getGroupMode() === "csv_group";
-    $("default_csv_row").style.display = csvGroup ? "none" : "";
+    const spcMode = getGroupMode() === "spc";
+    $("default_csv_row").style.display = csvGroup || spcMode ? "none" : "";
     $("csv_group_section").style.display = csvGroup ? "block" : "none";
+    $("spc_section").style.display = spcMode ? "block" : "none";
     if (csvGroup && $("csv_group_rows").children.length === 0) renderCsvGroupRows();
   }
 
@@ -1298,10 +1389,117 @@
     $("stat_segments").textContent = state.segmentCount;
   }
 
+  function renderSpcDates(dates = []) {
+    const box = $("spc_date_results");
+    box.innerHTML = "";
+    if (dates.length === 0) {
+      box.innerHTML = '<div class="empty-state">选择资源码后显示日期</div>';
+      return;
+    }
+    dates.forEach((date) => {
+      const item = document.createElement("div");
+      item.className = "spc-result";
+      item.textContent = date.name;
+      item.title = date.path;
+      item.addEventListener("click", async () => {
+        $("spc_date_path").value = date.path;
+        state.spcSourceCsv = "";
+        state.spcSnapshotCsv = "";
+        Array.from(box.children).forEach((child) => child.classList.remove("selected"));
+        item.classList.add("selected");
+        await scanCsv();
+      });
+      box.appendChild(item);
+    });
+  }
+
+  function renderSpcSuggestions(suggestions = []) {
+    const box = $("spc_date_results");
+    box.innerHTML = "";
+    const hint = document.createElement("div");
+    hint.className = "spc-hint";
+    hint.textContent = suggestions.length
+      ? "未找到该资源码，可能是下面这些资源码："
+      : "未找到该资源码文件夹，请检查资源码或 SPC 根目录。";
+    box.appendChild(hint);
+    suggestions.forEach((resource) => {
+      const item = document.createElement("div");
+      item.className = "spc-result";
+      item.textContent = resource.name;
+      item.title = resource.path;
+      item.addEventListener("click", async () => {
+        $("spc_query").value = resource.name;
+        $("spc_resource_path").value = resource.path;
+        $("spc_date_path").value = "";
+        state.spcSourceCsv = "";
+        state.spcSnapshotCsv = "";
+        await loadSpcDates(resource.path, false);
+      });
+      box.appendChild(item);
+    });
+  }
+
+  function resetSpcSelection() {
+    $("spc_resource_path").value = "";
+    $("spc_date_path").value = "";
+    state.spcSourceCsv = "";
+    state.spcSnapshotCsv = "";
+    renderSpcDates([]);
+  }
+
+  async function searchSpcResources(includeAllDates = false) {
+    setStatus("SPC 资源码加载中…", "busy");
+    $("spc_resource_path").value = "";
+    $("spc_date_path").value = "";
+    state.spcSourceCsv = "";
+    state.spcSnapshotCsv = "";
+    renderSpcDates([]);
+    const res = await api().search_spc_resources({
+      spc_root: $("spc_root").value.trim(),
+      query: $("spc_query").value.trim(),
+    });
+    if (!res.ok) {
+      setStatus("SPC 资源码加载失败: " + res.error, "error");
+      showToast("SPC 资源码加载失败", res.error, "error");
+      return;
+    }
+    const resources = res.resources || [];
+    if (resources.length === 0) {
+      const suggestions = res.suggestions || [];
+      renderSpcSuggestions(suggestions);
+      setStatus(suggestions.length ? "未找到该资源码文件夹，已列出可能匹配项" : "未找到该资源码文件夹", "error");
+      showToast(
+        "未找到资源码",
+        suggestions.length ? "请点击下方可能匹配的资源码继续加载。" : "请检查资源码是否完整，或确认 SPC 根目录是否正确。",
+        "error"
+      );
+      return;
+    }
+    $("spc_resource_path").value = resources[0].path;
+    await loadSpcDates(resources[0].path, includeAllDates);
+  }
+
+  async function loadSpcDates(resourcePath, includeAllDates = false) {
+    setStatus(includeAllDates ? "SPC 全部日期加载中…" : "SPC 近15天日期加载中…", "busy");
+    const res = await api().list_spc_dates({
+      spc_resource_path: resourcePath,
+      include_all: includeAllDates,
+    });
+    if (!res.ok) {
+      setStatus("SPC 日期加载失败: " + res.error, "error");
+      showToast("SPC 日期加载失败", res.error, "error");
+      return;
+    }
+    renderSpcDates(res.dates || []);
+    setStatus(`找到 ${res.dates.length} 个${includeAllDates ? "" : "近15天内"}日期文件夹`, "ok");
+  }
+
   // ---- CSV 扫描 ----
   async function scanCsv() {
     const csvPaths = getCsvPaths();
-    if (csvPaths.length === 0) {
+    const spcMode = getGroupMode() === "spc";
+    const hasSource = spcMode ? Boolean($("spc_date_path").value.trim() || state.spcSnapshotCsv) : csvPaths.length > 0;
+    if (!hasSource) {
       state.antennas = [];
       state.selected.clear();
       state.segmentCount = 0;
@@ -1312,7 +1510,7 @@
       renderSampleOptions([]);
       updateStats();
       setPreviewMessage("点击天线卡片预览图形");
-      setStatus("请选择 CSV 文件", "");
+      setStatus(spcMode ? "请选择 SPC 日期文件夹" : "请选择 CSV 文件", "");
       return;
     }
     setStatus("扫描中…", "busy");
@@ -1326,6 +1524,10 @@
     state.segmentCount = res.segment_count;
     state.selected = new Set(res.antennas.map((a) => a.key));
     state.samples = res.samples || [];
+    if (res.source_csv && res.snapshot_csv) {
+      state.spcSourceCsv = res.source_csv;
+      state.spcSnapshotCsv = res.snapshot_csv;
+    }
     renderAntennas();
     const groupDefaults = getGroupMode() === "csv_group" ? csvPaths.map(fileStem) : [];
     renderGroupLabels(res.segment_count, groupDefaults);
@@ -1355,6 +1557,32 @@
     } catch (err) {
       showToast("目录选择失败", String(err.message || err), "error");
     }
+  });
+
+  $("btn_pick_spc_root").addEventListener("click", async () => {
+    try {
+      const res = await api().pick_dir();
+      if (res.ok && res.path) {
+        $("spc_root").value = res.path;
+        resetSpcSelection();
+      }
+    } catch (err) {
+      showToast("SPC 根目录选择失败", String(err.message || err), "error");
+    }
+  });
+
+  $("btn_search_spc").addEventListener("click", () => searchSpcResources(false));
+  $("btn_load_all_spc_dates").addEventListener("click", async () => {
+    const resourcePath = $("spc_resource_path").value.trim();
+    if (resourcePath) await loadSpcDates(resourcePath, true);
+    else await searchSpcResources(true);
+  });
+  $("spc_query").addEventListener("keydown", async (event) => {
+    if (event.key === "Enter") await searchSpcResources();
+  });
+  $("spc_query").addEventListener("input", resetSpcSelection);
+  $("spc_root").addEventListener("input", () => {
+    resetSpcSelection();
   });
 
   $("btn_rescan").addEventListener("click", scanCsv);
@@ -1494,6 +1722,7 @@
     api().get_defaults().then((res) => {
       if (!res.ok) return;
       $("output_dir").value = res.output_dir;
+      $("spc_root").value = res.spc_root || "Z:\\";
     });
     setStatus("请选择 CSV 文件", "");
     scheduleStartupUpdateCheck();
