@@ -45,9 +45,16 @@ CSV_PATTERN = "*.csv"
 DEFAULT_OUTPUT_SUBDIR = "output"
 DEFAULT_SPC_ROOT = os.environ.get("RF_PLOT_TOOL_SPC_ROOT", "Z:\\").strip() or "Z:\\"
 SPC_SNAPSHOT_SUBDIR = "RFPlotTool-spc-snapshots"
-APP_VERSION = "0.0.9"
-APP_DISPLAY_VERSION = "V0.0.9"
+APP_VERSION = "0.0.10"
+APP_DISPLAY_VERSION = "V0.0.10"
 APP_UPDATE_EPOCH = 1
+CURRENT_VERSION_NOTES = (
+    "V0.0.7: improved large CSV scanning, selected-antenna parsing, tab-delimited CSV support, and faster batch chart rendering.\n"
+    "V0.0.8: add SPC mode support.\n"
+    "V0.0.9: add View All support and keyboard arrow navigation for image preview.\n"
+    "V0.0.10: merge all CSVs in SPC date folders, add SPC multi-date single-antenna overlay preview, "
+    "add fullscreen image preview, improve natural antenna sorting, and add clickable current-version release notes."
+)
 DEFAULT_UPDATE_MANIFEST_URL = "https://Andrew9896.github.io/RFPlotTool/version.json"
 UPDATE_MANIFEST_URL = os.environ.get("RF_PLOT_TOOL_UPDATE_URL", DEFAULT_UPDATE_MANIFEST_URL).strip()
 UPDATER_EXE_NAME = "updater.exe"
@@ -64,6 +71,7 @@ ANT_PATTERN = re.compile(
     r"^(S\d+):([^()]+?)\s*\(([^)]+)\)\s*Band:b(\d+)[\s:]+(?:Freq:\s*)?([0-9.]+)\s*M(?:Hz)?\s+Mag$"
 )
 ANT_KEY_PATTERN = re.compile(r"^(S\d+):(.+?)\(([^)]*)\)$")
+ANT_NAME_NUMBER_PATTERN = re.compile(r"^(.*?)(\d+)(.*)$")
 RF_PREFIX_PATTERN = re.compile(r"^\s*(S\d+)\s*[:_\-\s]\s*(.+)$", re.IGNORECASE)
 BAND_PATTERN = re.compile(r"(?:\bBand\s*[:=_\-\s]*b?\s*|\bB\s*)(\d+)\b", re.IGNORECASE)
 FREQ_PATTERN = re.compile(
@@ -136,6 +144,13 @@ class CsvScanMetadata:
 
 
 # ─────────────────────────── 文件辅助 ───────────────────────────
+
+@dataclass
+class SpcDateCsvGroup:
+    label: str
+    date_path: Path
+    source_csvs: list[Path]
+    snapshot_csvs: list[Path]
 
 
 def app_base_dir() -> Path:
@@ -402,11 +417,18 @@ def colors_for_group(labels: ChartLabels, group_idx: int) -> tuple[str, str]:
     return SERIES_COLORS[group_idx % len(SERIES_COLORS)]
 
 
-def antenna_sort_key(key: str) -> tuple[str, str, tuple[int, ...]]:
+def natural_antenna_name_key(name: str) -> tuple[str, int, str]:
+    match = ANT_NAME_NUMBER_PATTERN.match(name.strip())
+    if not match:
+        return (name.strip().lower(), -1, "")
+    return (match.group(1).lower(), int(match.group(2)), match.group(3).lower())
+
+
+def antenna_sort_key(key: str) -> tuple[str, tuple[str, int, str], tuple[int, ...]]:
     """按 S参数 → 天线名 → sub_id 数字序排列。"""
     match = ANT_KEY_PATTERN.match(key)
     if not match:
-        return ("ZZZ", key, ())
+        return ("ZZZ", natural_antenna_name_key(key), ())
     s_param = match.group(1)    # S11, S21
     ant_name = match.group(2)   # Ant2, ANT4_IL
     sub_id = match.group(3)     # 0:0:0
@@ -414,7 +436,7 @@ def antenna_sort_key(key: str) -> tuple[str, str, tuple[int, ...]]:
         sub = tuple(int(part) for part in sub_id.split(":"))
     except ValueError:
         sub = ()
-    return (s_param, ant_name, sub)
+    return (s_param, natural_antenna_name_key(ant_name), sub)
 
 
 def safe_filename(key: str) -> str:
@@ -927,6 +949,30 @@ def find_largest_spc_csv(date_path: Path | str) -> Path:
     return largest[2]
 
 
+def find_spc_csvs(date_path: Path | str) -> list[Path]:
+    date_dir = Path(str(date_path or "").strip())
+    if not date_dir.exists():
+        raise FileNotFoundError(f"SPC date path does not exist: {date_dir}")
+    if not date_dir.is_dir():
+        raise NotADirectoryError(f"SPC date path is not a directory: {date_dir}")
+
+    csv_paths: list[Path] = []
+    for path in date_dir.rglob("*"):
+        try:
+            if path.is_file() and path.suffix.lower() == ".csv":
+                csv_paths.append(path)
+        except OSError:
+            continue
+
+    if not csv_paths:
+        raise FileNotFoundError(f"No CSV file was found under SPC date path: {date_dir}")
+
+    return sorted(
+        csv_paths,
+        key=lambda path: tuple(part.lower() for part in path.relative_to(date_dir).parts),
+    )
+
+
 def copy_spc_csv_for_read(source_csv: Path | str) -> Path:
     source = Path(str(source_csv or "").strip())
     if not source.exists():
@@ -944,6 +990,23 @@ def copy_spc_csv_for_read(source_csv: Path | str) -> Path:
     return target
 
 
+def copy_spc_csvs_for_read(source_csvs: list[Path]) -> list[Path]:
+    return [copy_spc_csv_for_read(source) for source in source_csvs]
+
+
+def path_list_from_value(value) -> list[Path]:
+    if isinstance(value, list):
+        return [Path(str(item).strip()) for item in value if str(item).strip()]
+    if isinstance(value, tuple):
+        return [Path(str(item).strip()) for item in value if str(item).strip()]
+    text = str(value or "").strip()
+    return [Path(text)] if text else []
+
+
+def payload_path_list(payload: dict, key: str) -> list[Path]:
+    return path_list_from_value(payload.get(key))
+
+
 def resolve_spc_csv_snapshot(payload: dict) -> tuple[Path, Path]:
     snapshot_value = str(payload.get("spc_snapshot_csv") or "").strip()
     source_value = str(payload.get("spc_source_csv") or "").strip()
@@ -957,6 +1020,98 @@ def resolve_spc_csv_snapshot(payload: dict) -> tuple[Path, Path]:
     date_path = Path(str(payload.get("spc_date_path") or "").strip())
     source = find_largest_spc_csv(date_path)
     return source, copy_spc_csv_for_read(source)
+
+
+def spc_date_label(date_path: Path, fallback: str = "SPC Date") -> str:
+    return date_path.name if str(date_path) else fallback
+
+
+def serialize_spc_date_group(group: SpcDateCsvGroup) -> dict:
+    return {
+        "label": group.label,
+        "date_path": str(group.date_path),
+        "source_csvs": [str(path) for path in group.source_csvs],
+        "snapshot_csvs": [str(path) for path in group.snapshot_csvs],
+    }
+
+
+def resolve_spc_group_from_date(date_path: Path | str) -> SpcDateCsvGroup:
+    date_dir = Path(str(date_path or "").strip())
+    source_csvs = find_spc_csvs(date_dir)
+    return SpcDateCsvGroup(
+        label=spc_date_label(date_dir),
+        date_path=date_dir,
+        source_csvs=source_csvs,
+        snapshot_csvs=copy_spc_csvs_for_read(source_csvs),
+    )
+
+
+def resolve_spc_date_csv_groups(payload: dict) -> list[SpcDateCsvGroup]:
+    raw_groups = payload.get("spc_date_groups") or []
+    groups: list[SpcDateCsvGroup] = []
+    if isinstance(raw_groups, list):
+        for raw in raw_groups:
+            if not isinstance(raw, dict):
+                continue
+            date_path = Path(str(raw.get("date_path") or "").strip())
+            label = str(raw.get("label") or "").strip() or spc_date_label(date_path)
+            source_csvs = path_list_from_value(raw.get("source_csvs"))
+            snapshot_csvs = path_list_from_value(raw.get("snapshot_csvs"))
+            if not snapshot_csvs:
+                if source_csvs:
+                    snapshot_csvs = copy_spc_csvs_for_read(source_csvs)
+                elif str(date_path):
+                    groups.append(resolve_spc_group_from_date(date_path))
+                    continue
+                else:
+                    raise ValueError("SPC date group is missing snapshot CSV files.")
+            for snapshot in snapshot_csvs:
+                if not snapshot.exists():
+                    raise FileNotFoundError(f"SPC CSV snapshot does not exist: {snapshot}")
+            if source_csvs and len(source_csvs) != len(snapshot_csvs):
+                raise ValueError("SPC source CSV count does not match snapshot CSV count.")
+            groups.append(SpcDateCsvGroup(label, date_path, source_csvs or snapshot_csvs, snapshot_csvs))
+    if groups:
+        return groups
+
+    date_paths = payload_path_list(payload, "spc_date_paths")
+    if date_paths:
+        return [resolve_spc_group_from_date(path) for path in date_paths]
+
+    snapshots = payload_path_list(payload, "spc_snapshot_csvs")
+    if snapshots:
+        sources = payload_path_list(payload, "spc_source_csvs")
+        for snapshot in snapshots:
+            if not snapshot.exists():
+                raise FileNotFoundError(f"SPC CSV snapshot does not exist: {snapshot}")
+        if sources and len(sources) != len(snapshots):
+            raise ValueError("SPC source CSV count does not match snapshot CSV count.")
+        date_path = Path(str(payload.get("spc_date_path") or "").strip())
+        return [SpcDateCsvGroup(spc_date_label(date_path), date_path, sources or snapshots, snapshots)]
+
+    if str(payload.get("spc_snapshot_csv") or "").strip():
+        source, snapshot = resolve_spc_csv_snapshot(payload)
+        date_path = Path(str(payload.get("spc_date_path") or "").strip())
+        return [SpcDateCsvGroup(spc_date_label(date_path), date_path, [source], [snapshot])]
+
+    return [resolve_spc_group_from_date(payload.get("spc_date_path") or "")]
+
+
+def resolve_spc_csv_snapshots(payload: dict) -> tuple[list[Path], list[Path]]:
+    groups = resolve_spc_date_csv_groups(payload)
+    sources = [path for group in groups for path in group.source_csvs]
+    snapshots = [path for group in groups for path in group.snapshot_csvs]
+    return sources, snapshots
+
+
+def spc_source_path_for_output(payload: dict, source_csvs: list[Path]) -> Path:
+    date_paths = payload_path_list(payload, "spc_date_paths")
+    if len(date_paths) > 1:
+        return Path(f"{date_paths[0].name}_multi_dates")
+    date_path = Path(str(payload.get("spc_date_path") or "").strip())
+    if date_path:
+        return date_path
+    return source_csvs[0]
 
 
 def parse_sample_id(value: str) -> tuple[int, int] | None:
@@ -1098,6 +1253,108 @@ def render_preview_png_for_data(
             highlight_sample_ids=highlight_sample_ids,
         )
         fig.tight_layout()
+        buffer = BytesIO()
+        fig.savefig(buffer, format="png")
+        return buffer.getvalue()
+    finally:
+        plt.close(fig)
+
+
+def parsed_data_from_snapshots(snapshot_csvs: list[Path], selected_keys: list[str] | None = None) -> ParsedData:
+    if len(snapshot_csvs) == 1:
+        return parse_csv(snapshot_csvs[0], selected_keys=selected_keys)
+    return parse_csv_group_files(snapshot_csvs, selected_keys=selected_keys)
+
+
+def chart_labels_for_preview_section(
+    base: ChartLabels,
+    title: str,
+    group_labels: list[str],
+) -> ChartLabels:
+    return ChartLabels(
+        overview_title=title,
+        group_labels=group_labels,
+        group_colors=base.group_colors,
+        upper_limit=base.upper_limit,
+        lower_limit=base.lower_limit,
+    )
+
+
+def render_spc_multi_date_preview_png(
+    groups: list[SpcDateCsvGroup],
+    antenna_key: str,
+    labels: ChartLabels,
+    highlight_sample_ids: list[str] | None = None,
+) -> bytes:
+    if not antenna_key:
+        raise ValueError("璇烽€夋嫨涓€涓ぉ绾胯繘琛岄瑙堛€?")
+    if len(groups) < 2:
+        source_csvs = [path for group in groups for path in group.source_csvs]
+        snapshot_csvs = [path for group in groups for path in group.snapshot_csvs]
+        data = parsed_data_from_snapshots(snapshot_csvs, selected_keys=[antenna_key])
+        section_labels = [path.stem for path in source_csvs]
+        return render_preview_png_for_data(
+            data,
+            antenna_key,
+            chart_labels_for_preview_section(labels, labels.overview_title, section_labels),
+            highlight_sample_ids=highlight_sample_ids,
+        )
+
+    configure_fonts()
+    parsed_sections: list[tuple[SpcDateCsvGroup, ParsedData]] = []
+    all_snapshots: list[Path] = []
+    all_group_labels: list[str] = []
+
+    for group in groups:
+        data = parsed_data_from_snapshots(group.snapshot_csvs, selected_keys=[antenna_key])
+        validate_selection(data, [antenna_key])
+        parsed_sections.append((group, data))
+        all_snapshots.extend(group.snapshot_csvs)
+        if len(group.source_csvs) == 1:
+            all_group_labels.append(group.label)
+        else:
+            all_group_labels.extend([f"{group.label} / {path.stem}" for path in group.source_csvs])
+
+    all_data = parsed_data_from_snapshots(all_snapshots, selected_keys=[antenna_key])
+    validate_selection(all_data, [antenna_key])
+
+    row_count = len(parsed_sections) + 1
+    fig, axes = plt.subplots(row_count, 1, figsize=(14, max(7.0, row_count * 5.0)), dpi=130, squeeze=False)
+    try:
+        flat_axes = list(axes.ravel())
+        for ax, (group, data) in zip(flat_axes, parsed_sections):
+            group_labels = [path.stem for path in group.source_csvs]
+            section_labels = labels_for_segment_count(
+                chart_labels_for_preview_section(labels, group.label, group_labels),
+                len(data.segments),
+            )
+            draw_chart(
+                ax,
+                antenna_key,
+                data.antennas[antenna_key],
+                data,
+                section_labels,
+                legend_fontsize=7,
+                highlight_sample_ids=highlight_sample_ids,
+            )
+            ax.set_title(f"{group.label} · {antenna_key}", fontsize=12)
+
+        all_labels = labels_for_segment_count(
+            chart_labels_for_preview_section(labels, "All Selected Dates", all_group_labels),
+            len(all_data.segments),
+        )
+        draw_chart(
+            flat_axes[-1],
+            antenna_key,
+            all_data.antennas[antenna_key],
+            all_data,
+            all_labels,
+            legend_fontsize=7,
+            highlight_sample_ids=highlight_sample_ids,
+        )
+        flat_axes[-1].set_title(f"All Selected Dates · {antenna_key}", fontsize=12)
+        fig.suptitle(labels.overview_title, fontsize=16, y=0.995)
+        fig.tight_layout(rect=(0, 0, 1, 0.985))
         buffer = BytesIO()
         fig.savefig(buffer, format="png")
         return buffer.getvalue()
@@ -1291,6 +1548,7 @@ class Api:
             "spc_root": DEFAULT_SPC_ROOT,
             "version": APP_VERSION,
             "display_version": APP_DISPLAY_VERSION,
+            "current_version_notes": CURRENT_VERSION_NOTES,
         }
 
     def search_spc_resources(self, payload: dict) -> dict:
@@ -1423,9 +1681,9 @@ class Api:
             data = parse_csv_group_files(csv_paths, selected_keys=selected_keys)
             return data, csv_paths[0]
         if payload.get("group_mode") == "spc":
-            source_csv, snapshot_csv = resolve_spc_csv_snapshot(payload)
-            data = parse_csv(snapshot_csv, selected_keys=selected_keys)
-            return data, source_csv
+            source_csvs, snapshot_csvs = resolve_spc_csv_snapshots(payload)
+            data = parsed_data_from_snapshots(snapshot_csvs, selected_keys=selected_keys)
+            return data, spc_source_path_for_output(payload, source_csvs)
         csv_path = Path(payload.get("csv_path", "").strip())
         return parse_csv(csv_path, selected_keys=selected_keys), csv_path
 
@@ -1437,20 +1695,39 @@ class Api:
                     metadata = None
                     source_csv = None
                     snapshot_csv = None
+                    source_csvs = []
+                    snapshot_csvs = []
+                    spc_date_groups = []
                 elif csv_path.get("group_mode") == "spc":
-                    source_csv, snapshot_csv = resolve_spc_csv_snapshot(csv_path)
-                    metadata = scan_csv_metadata(snapshot_csv)
-                    data = None
+                    spc_date_groups = resolve_spc_date_csv_groups(csv_path)
+                    source_csvs = [path for group in spc_date_groups for path in group.source_csvs]
+                    snapshot_csvs = [path for group in spc_date_groups for path in group.snapshot_csvs]
+                    if len(snapshot_csvs) == 1:
+                        source_csv = source_csvs[0]
+                        snapshot_csv = snapshot_csvs[0]
+                        metadata = scan_csv_metadata(snapshot_csv)
+                        data = None
+                    else:
+                        source_csv = source_csvs[0]
+                        snapshot_csv = snapshot_csvs[0]
+                        metadata = None
+                        data = parse_csv_group_files(snapshot_csvs)
                 else:
                     metadata = scan_csv_metadata(Path(csv_path.get("csv_path", "").strip()))
                     data = None
                     source_csv = None
                     snapshot_csv = None
+                    source_csvs = []
+                    snapshot_csvs = []
+                    spc_date_groups = []
             else:
                 metadata = scan_csv_metadata(Path(csv_path))
                 data = None
                 source_csv = None
                 snapshot_csv = None
+                source_csvs = []
+                snapshot_csvs = []
+                spc_date_groups = []
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
@@ -1478,19 +1755,47 @@ class Api:
         if source_csv and snapshot_csv:
             result["source_csv"] = str(source_csv)
             result["snapshot_csv"] = str(snapshot_csv)
+        if source_csvs and snapshot_csvs:
+            result["source_csvs"] = [str(path) for path in source_csvs]
+            result["snapshot_csvs"] = [str(path) for path in snapshot_csvs]
+        if spc_date_groups:
+            result["spc_date_groups"] = [serialize_spc_date_group(group) for group in spc_date_groups]
         return result
 
     # ---- 生成图表 ----
     def preview(self, payload: dict) -> dict:
         try:
             antenna_key = (payload.get("antenna_key") or "").strip()
-            data, _ = self.data_from_payload(payload, selected_keys=[antenna_key] if antenna_key else None)
-            image_bytes = render_preview_png_for_data(
-                data,
-                antenna_key,
-                chart_labels_from_payload(payload),
-                highlight_sample_ids=normalize_highlight_sample_ids(payload),
-            )
+            labels = chart_labels_from_payload(payload)
+            highlight_sample_ids = normalize_highlight_sample_ids(payload)
+            if payload.get("group_mode") == "spc":
+                spc_date_groups = resolve_spc_date_csv_groups(payload)
+                if len(spc_date_groups) > 1:
+                    image_bytes = render_spc_multi_date_preview_png(
+                        spc_date_groups,
+                        antenna_key,
+                        labels,
+                        highlight_sample_ids=highlight_sample_ids,
+                    )
+                else:
+                    data = parsed_data_from_snapshots(
+                        spc_date_groups[0].snapshot_csvs,
+                        selected_keys=[antenna_key] if antenna_key else None,
+                    )
+                    image_bytes = render_preview_png_for_data(
+                        data,
+                        antenna_key,
+                        labels,
+                        highlight_sample_ids=highlight_sample_ids,
+                    )
+            else:
+                data, _ = self.data_from_payload(payload, selected_keys=[antenna_key] if antenna_key else None)
+                image_bytes = render_preview_png_for_data(
+                    data,
+                    antenna_key,
+                    labels,
+                    highlight_sample_ids=highlight_sample_ids,
+                )
             encoded = base64.b64encode(image_bytes).decode("ascii")
             return {
                 "ok": True,

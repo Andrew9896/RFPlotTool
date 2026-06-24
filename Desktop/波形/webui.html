@@ -526,6 +526,13 @@
     gap: 10px;
   }
 
+  .version-button {
+    align-self: center;
+    color: var(--text-dim);
+    border-radius: 999px;
+    padding: 7px 12px;
+  }
+
   /* Toast */
   .toast {
     position: fixed;
@@ -581,6 +588,11 @@
     display: flex;
   }
 
+  .preview-modal.fullscreen {
+    padding: 0;
+    background: rgba(4, 6, 18, 0.92);
+  }
+
   .preview-dialog {
     width: min(1500px, calc(100vw - 56px));
     height: min(920px, calc(100vh - 56px));
@@ -591,6 +603,13 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+
+  .preview-modal.fullscreen .preview-dialog {
+    width: 100vw;
+    height: 100vh;
+    border: 0;
+    border-radius: 0;
   }
 
   .preview-dialog-header {
@@ -615,6 +634,19 @@
     font-weight: 600;
   }
 
+  .preview-dialog-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .preview-fullscreen {
+    height: 34px;
+    padding: 0 12px;
+    border-radius: 999px;
+    line-height: 1;
+  }
+
   .preview-close {
     width: 34px;
     height: 34px;
@@ -631,7 +663,11 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 18px;
+    padding: 12px;
+  }
+
+  .preview-modal.fullscreen .preview-dialog-body {
+    padding: 8px;
   }
 
   .preview-dialog-body img {
@@ -882,6 +918,7 @@
       <span class="text">Ready</span>
     </div>
     <div class="footer-actions">
+      <button class="ghost version-button" id="app_version" type="button">Version</button>
       <button class="ghost" id="btn_check_update">检查更新</button>
       <button class="ghost" id="btn_open_dir">打开输出目录</button>
       <button class="primary" id="btn_generate">生成图表</button>
@@ -900,7 +937,10 @@
           <div class="preview-dialog-title" id="preview_title">图形预览</div>
           <div class="preview-dialog-name" id="preview_name"></div>
         </div>
-        <button class="ghost preview-close" id="btn_close_preview" title="关闭预览">×</button>
+        <div class="preview-dialog-actions">
+          <button class="ghost preview-fullscreen" id="btn_toggle_preview_fullscreen" title="全屏预览">全屏</button>
+          <button class="ghost preview-close" id="btn_close_preview" title="关闭预览">×</button>
+        </div>
       </div>
       <div class="preview-dialog-body">
         <img id="preview_image" alt="天线图形预览" />
@@ -935,7 +975,10 @@
   </div>
 
 <script>
-  const api = () => window.pywebview.api;
+  const api = () => {
+    if (window.pywebview && window.pywebview.api) return window.pywebview.api;
+    throw new Error("请通过 RFPlotTool.exe 启动软件，不能直接用浏览器打开 webui.html。");
+  };
   const $ = (id) => document.getElementById(id);
   const DEFAULT_GROUP_COLORS = [
     "#15803d", "#dc2626", "#1d4ed8", "#c2410c", "#7e22ce",
@@ -954,9 +997,24 @@
     pendingUpdate: null,
     startupUpdateChecked: false,
     updateProgressTimer: null,
+    currentVersion: "",
+    currentDisplayVersion: "",
+    currentVersionNotes: "",
     spcSourceCsv: "",
     spcSnapshotCsv: "",
+    spcSourceCsvs: [],
+    spcSnapshotCsvs: [],
+    selectedSpcDates: [],
+    spcDateGroups: [],
   };
+
+  function clearSpcCsvCache() {
+    state.spcSourceCsv = "";
+    state.spcSnapshotCsv = "";
+    state.spcSourceCsvs = [];
+    state.spcSnapshotCsvs = [];
+    state.spcDateGroups = [];
+  }
 
   // ---- 状态栏 ----
   function setStatus(text, kind = "") {
@@ -976,11 +1034,25 @@
 
   function showUpdateModal(updateInfo) {
     state.pendingUpdate = updateInfo;
+    $("update_title").textContent = "发现新版本";
+    $("btn_update_now").style.display = "";
+    $("btn_skip_update").textContent = "暂不更新";
     const current = updateInfo.current_display_version || updateInfo.current_version || "";
     const latest = updateInfo.display_version || updateInfo.version || "";
     $("update_version").textContent = `当前版本 ${current}，最新版本 ${latest}`;
     $("update_notes").textContent = updateInfo.notes || "暂无更新说明";
     resetUpdateProgress();
+    $("update_modal").classList.add("show");
+  }
+
+  function showCurrentVersionNotes() {
+    state.pendingUpdate = null;
+    $("update_title").textContent = "当前版本";
+    $("update_version").textContent = `RF Plot Tool ${state.currentDisplayVersion || state.currentVersion || ""}`;
+    $("update_notes").textContent = state.currentVersionNotes || "暂无更新说明";
+    $("update_progress").classList.remove("show");
+    $("btn_update_now").style.display = "none";
+    $("btn_skip_update").textContent = "关闭";
     $("update_modal").classList.add("show");
   }
 
@@ -1001,6 +1073,8 @@
     $("update_progress_fill").style.width = "0%";
     $("btn_skip_update").disabled = false;
     $("btn_update_now").disabled = false;
+    $("btn_skip_update").textContent = "暂不更新";
+    $("btn_update_now").style.display = "";
   }
 
   function renderUpdateProgress(progress) {
@@ -1105,6 +1179,8 @@
 
   function getCsvPaths() {
     if (getGroupMode() === "spc") {
+      if (state.spcSnapshotCsvs.length) return state.spcSnapshotCsvs;
+      if (state.spcDateGroups.length) return state.spcDateGroups.flatMap((group) => group.snapshot_csvs || []);
       return state.spcSnapshotCsv ? [state.spcSnapshotCsv] : [];
     }
     if (getGroupMode() === "csv_group") {
@@ -1124,8 +1200,12 @@
       spc_root: $("spc_root").value.trim(),
       spc_resource_path: $("spc_resource_path").value.trim(),
       spc_date_path: $("spc_date_path").value.trim(),
+      spc_date_paths: state.selectedSpcDates.map((date) => date.path),
       spc_source_csv: state.spcSourceCsv,
       spc_snapshot_csv: state.spcSnapshotCsv,
+      spc_source_csvs: state.spcSourceCsvs,
+      spc_snapshot_csvs: state.spcSnapshotCsvs,
+      spc_date_groups: state.spcDateGroups,
       ...extra,
     };
   }
@@ -1289,14 +1369,22 @@
     $("preview_message").textContent = text;
   }
 
-  function openPreviewModal() {
+  function setPreviewFullscreen(enabled) {
+    $("preview_modal").classList.toggle("fullscreen", Boolean(enabled));
+    $("btn_toggle_preview_fullscreen").textContent = enabled ? "还原" : "全屏";
+    $("btn_toggle_preview_fullscreen").title = enabled ? "退出全屏预览" : "全屏预览";
+  }
+
+  function openPreviewModal(fullscreen = false) {
     $("preview_modal").classList.add("show");
+    setPreviewFullscreen(fullscreen);
   }
 
   function closePreviewModal() {
     state.previewRequestId += 1;
     state.previewAntennaKey = "";
     $("preview_modal").classList.remove("show");
+    setPreviewFullscreen(false);
   }
 
   function toggleSelection(key, card) {
@@ -1364,7 +1452,7 @@
 
     const requestId = ++state.previewRequestId;
     state.previewAntennaKey = "";
-    openPreviewModal();
+    openPreviewModal(true);
     $("preview_name").textContent = `View All · ${state.selected.size} 个天线`;
     $("preview_image").style.display = "none";
     $("preview_message").style.display = "block";
@@ -1461,6 +1549,24 @@
     $("stat_segments").textContent = state.segmentCount;
   }
 
+  function isSpcDateSelected(date) {
+    return state.selectedSpcDates.some((item) => item.path === date.path);
+  }
+
+  function syncSpcDatePathField() {
+    $("spc_date_path").value = state.selectedSpcDates.length ? state.selectedSpcDates[0].path : "";
+  }
+
+  function toggleSpcDateSelection(date) {
+    if (isSpcDateSelected(date)) {
+      state.selectedSpcDates = state.selectedSpcDates.filter((item) => item.path !== date.path);
+    } else {
+      state.selectedSpcDates.push({ name: date.name, path: date.path });
+    }
+    syncSpcDatePathField();
+    clearSpcCsvCache();
+  }
+
   function renderSpcDates(dates = []) {
     const box = $("spc_date_results");
     box.innerHTML = "";
@@ -1470,15 +1576,12 @@
     }
     dates.forEach((date) => {
       const item = document.createElement("div");
-      item.className = "spc-result";
-      item.textContent = date.name;
+      item.className = "spc-result" + (isSpcDateSelected(date) ? " selected" : "");
+      item.textContent = (isSpcDateSelected(date) ? "✓ " : "") + date.name;
       item.title = date.path;
       item.addEventListener("click", async () => {
-        $("spc_date_path").value = date.path;
-        state.spcSourceCsv = "";
-        state.spcSnapshotCsv = "";
-        Array.from(box.children).forEach((child) => child.classList.remove("selected"));
-        item.classList.add("selected");
+        toggleSpcDateSelection(date);
+        renderSpcDates(dates);
         await scanCsv();
       });
       box.appendChild(item);
@@ -1503,8 +1606,8 @@
         $("spc_query").value = resource.name;
         $("spc_resource_path").value = resource.path;
         $("spc_date_path").value = "";
-        state.spcSourceCsv = "";
-        state.spcSnapshotCsv = "";
+        state.selectedSpcDates = [];
+        clearSpcCsvCache();
         await loadSpcDates(resource.path, false);
       });
       box.appendChild(item);
@@ -1514,8 +1617,8 @@
   function resetSpcSelection() {
     $("spc_resource_path").value = "";
     $("spc_date_path").value = "";
-    state.spcSourceCsv = "";
-    state.spcSnapshotCsv = "";
+    state.selectedSpcDates = [];
+    clearSpcCsvCache();
     renderSpcDates([]);
   }
 
@@ -1523,8 +1626,8 @@
     setStatus("SPC 资源码加载中…", "busy");
     $("spc_resource_path").value = "";
     $("spc_date_path").value = "";
-    state.spcSourceCsv = "";
-    state.spcSnapshotCsv = "";
+    state.selectedSpcDates = [];
+    clearSpcCsvCache();
     renderSpcDates([]);
     const res = await api().search_spc_resources({
       spc_root: $("spc_root").value.trim(),
@@ -1570,7 +1673,9 @@
   async function scanCsv() {
     const csvPaths = getCsvPaths();
     const spcMode = getGroupMode() === "spc";
-    const hasSource = spcMode ? Boolean($("spc_date_path").value.trim() || state.spcSnapshotCsv) : csvPaths.length > 0;
+    const hasSource = spcMode
+      ? Boolean(state.selectedSpcDates.length || state.spcDateGroups.length || $("spc_date_path").value.trim() || state.spcSnapshotCsv || state.spcSnapshotCsvs.length)
+      : csvPaths.length > 0;
     if (!hasSource) {
       state.antennas = [];
       state.selected.clear();
@@ -1600,8 +1705,17 @@
       state.spcSourceCsv = res.source_csv;
       state.spcSnapshotCsv = res.snapshot_csv;
     }
+    if (res.source_csvs && res.snapshot_csvs) {
+      state.spcSourceCsvs = res.source_csvs;
+      state.spcSnapshotCsvs = res.snapshot_csvs;
+    }
+    if (res.spc_date_groups) {
+      state.spcDateGroups = res.spc_date_groups;
+    }
     renderAntennas();
-    const groupDefaults = getGroupMode() === "csv_group" ? csvPaths.map(fileStem) : [];
+    const groupDefaults = getGroupMode() === "csv_group"
+      ? csvPaths.map(fileStem)
+      : (spcMode ? (state.spcSourceCsvs.length ? state.spcSourceCsvs : [state.spcSourceCsv].filter(Boolean)).map(fileStem) : []);
     renderGroupLabels(res.segment_count, groupDefaults);
     renderSampleOptions(state.samples);
     updateStats();
@@ -1682,6 +1796,7 @@
     }
   });
 
+  $("app_version").addEventListener("click", showCurrentVersionNotes);
   $("btn_skip_update").addEventListener("click", closeUpdateModal);
   $("btn_update_now").addEventListener("click", async () => {
     const button = $("btn_update_now");
@@ -1737,6 +1852,9 @@
 
   $("btn_add_csv_group").addEventListener("click", () => addCsvGroupRow());
 
+  $("btn_toggle_preview_fullscreen").addEventListener("click", () => {
+    setPreviewFullscreen(!$("preview_modal").classList.contains("fullscreen"));
+  });
   $("btn_close_preview").addEventListener("click", closePreviewModal);
   $("preview_modal").addEventListener("click", (event) => {
     if (event.target === $("preview_modal")) closePreviewModal();
@@ -1804,6 +1922,10 @@
       if (!res.ok) return;
       $("output_dir").value = res.output_dir;
       $("spc_root").value = res.spc_root || "Z:\\";
+      state.currentVersion = res.version || "";
+      state.currentDisplayVersion = res.display_version || res.version || "";
+      state.currentVersionNotes = res.current_version_notes || "";
+      $("app_version").textContent = state.currentDisplayVersion || "Version";
     });
     setStatus("请选择 CSV 文件", "");
     scheduleStartupUpdateCheck();

@@ -253,7 +253,7 @@ class RfPlotUiTests(unittest.TestCase):
     def test_antenna_sort_key_orders_by_ant_no_then_sub(self) -> None:
         keys = ["S11:Ant8(0:0:0)", "S11:Ant2(1:0:0)", "S11:Ant2(0:0:0)", "S11:Ant10(0:0:0)"]
         ordered = sorted(keys, key=rf_plot_ui.antenna_sort_key)
-        self.assertEqual(ordered, ["S11:Ant10(0:0:0)", "S11:Ant2(0:0:0)", "S11:Ant2(1:0:0)", "S11:Ant8(0:0:0)"])
+        self.assertEqual(ordered, ["S11:Ant2(0:0:0)", "S11:Ant2(1:0:0)", "S11:Ant8(0:0:0)", "S11:Ant10(0:0:0)"])
 
     def test_safe_filename_strips_special_chars(self) -> None:
         self.assertEqual(rf_plot_ui.safe_filename("S11:Ant2(0:0:0)"), "S11_Ant2_0_0_0")
@@ -581,6 +581,21 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertNotEqual(snapshot, large_csv)
         self.assertEqual(snapshot.read_text(encoding="utf-8"), large_csv.read_text(encoding="utf-8"))
 
+    def test_find_spc_csvs_returns_all_recursive_csvs_in_stable_order(self) -> None:
+        date_dir = self.test_dir / "spc" / "ZDS3UAT2VSWR0001" / "20260620"
+        nested = date_dir / "Production Mode"
+        nested.mkdir(parents=True)
+        csv_b = nested / "b.csv"
+        csv_a = date_dir / "a.csv"
+        ignored = date_dir / "notes.txt"
+        csv_b.write_text("b\n", encoding="utf-8")
+        csv_a.write_text("a\n", encoding="utf-8")
+        ignored.write_text("not csv\n", encoding="utf-8")
+
+        csvs = rf_plot_ui.find_spc_csvs(date_dir)
+
+        self.assertEqual(csvs, [csv_a, csv_b])
+
     def test_scan_csv_supports_spc_mode_with_snapshot_copy(self) -> None:
         root = self.test_dir / "spc"
         date_dir = root / "ZDS3UAT2VSWR0001" / "20260620"
@@ -601,6 +616,51 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertEqual(result["source_csv"], str(source_csv))
         self.assertNotEqual(result["snapshot_csv"], str(source_csv))
         self.assertTrue(Path(result["snapshot_csv"]).exists())
+
+    def test_scan_csv_supports_spc_mode_with_all_date_csvs(self) -> None:
+        root = self.test_dir / "spc"
+        date_dir = root / "ZDS3UAT2VSWR0001" / "20260620"
+        nested = date_dir / "Production Mode"
+        nested.mkdir(parents=True)
+        csv_a = date_dir / "a.csv"
+        csv_b = nested / "b.csv"
+        write_sample_csv(csv_a, 1)
+        write_sample_csv(csv_b, 1)
+
+        result = rf_plot_ui.Api().scan_csv({
+            "group_mode": "spc",
+            "spc_root": str(root),
+            "spc_resource_path": str(root / "ZDS3UAT2VSWR0001"),
+            "spc_date_path": str(date_dir),
+        })
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["segment_count"], 2)
+        self.assertEqual(result["source_csvs"], [str(csv_a), str(csv_b)])
+        self.assertEqual(len(result["snapshot_csvs"]), 2)
+        self.assertTrue(all(Path(path).exists() for path in result["snapshot_csvs"]))
+
+    def test_api_preview_supports_spc_multi_date_overlay_image(self) -> None:
+        root = self.test_dir / "spc"
+        resource = root / "ZDS3UAT2VSWR0001"
+        date_a = resource / "20260623"
+        date_b = resource / "20260620"
+        date_a.mkdir(parents=True)
+        date_b.mkdir(parents=True)
+        write_sample_csv(date_a / "a.csv", 1)
+        write_sample_csv(date_b / "b.csv", 1)
+
+        result = rf_plot_ui.Api().preview({
+            "group_mode": "spc",
+            "spc_date_paths": [str(date_a), str(date_b)],
+            "antenna_key": "S11:Ant2(0:0:0)",
+        })
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["antenna"], "S11:Ant2(0:0:0)")
+        self.assertTrue(result["image"].startswith("data:image/png;base64,"))
+        payload = result["image"].split(",", 1)[1]
+        self.assertTrue(base64.b64decode(payload).startswith(b"\x89PNG\r\n\x1a\n"))
 
     def test_preview_accepts_highlight_sample_id(self) -> None:
         write_sample_csv(self.csv_path, 2)
@@ -694,6 +754,13 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertIn('event.key === "ArrowRight"', html)
         self.assertIn("previewAntenna(nextKey)", html)
 
+    def test_webui_preview_modal_supports_fullscreen_view(self) -> None:
+        html = Path("webui.html").read_text(encoding="utf-8")
+        self.assertIn('id="btn_toggle_preview_fullscreen"', html)
+        self.assertIn("preview-modal.fullscreen", html)
+        self.assertIn("function setPreviewFullscreen", html)
+        self.assertIn("openPreviewModal(true)", html)
+
     def test_webui_group_labels_include_color_picker_and_payload(self) -> None:
         html = Path("webui.html").read_text(encoding="utf-8")
         self.assertIn('color.type = "color"', html)
@@ -724,6 +791,14 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertIn("spc_root:", html)
         self.assertIn("spc_resource_path:", html)
         self.assertIn("spc_date_path:", html)
+
+    def test_webui_spc_dates_support_multi_select_payload(self) -> None:
+        html = Path("webui.html").read_text(encoding="utf-8")
+        self.assertIn("selectedSpcDates", html)
+        self.assertIn("spcDateGroups", html)
+        self.assertIn("spc_date_paths:", html)
+        self.assertIn("spc_date_groups:", html)
+        self.assertIn("toggleSpcDateSelection", html)
 
     def test_validate_selection_rejects_missing_data(self) -> None:
         write_sample_csv(self.csv_path, 2)
@@ -983,6 +1058,22 @@ class RfPlotUiTests(unittest.TestCase):
         html = Path("webui.html").read_text(encoding="utf-8")
         self.assertIn('id="btn_check_update"', html)
         self.assertIn("api().check_update", html)
+
+    def test_api_defaults_include_current_version_notes(self) -> None:
+        defaults = rf_plot_ui.Api().get_defaults()
+
+        self.assertEqual(defaults["version"], rf_plot_ui.APP_VERSION)
+        self.assertEqual(defaults["display_version"], rf_plot_ui.APP_DISPLAY_VERSION)
+        self.assertIn("current_version_notes", defaults)
+        self.assertIn(rf_plot_ui.APP_DISPLAY_VERSION, defaults["current_version_notes"])
+        self.assertIn("V0.0.7", defaults["current_version_notes"])
+        self.assertIn("V0.0.9", defaults["current_version_notes"])
+
+    def test_webui_has_clickable_current_version_notes(self) -> None:
+        html = Path("webui.html").read_text(encoding="utf-8")
+        self.assertIn('id="app_version"', html)
+        self.assertIn("showCurrentVersionNotes", html)
+        self.assertIn("currentVersionNotes", html)
 
     def test_webui_prompts_before_installing_available_update(self) -> None:
         html = Path("webui.html").read_text(encoding="utf-8")
