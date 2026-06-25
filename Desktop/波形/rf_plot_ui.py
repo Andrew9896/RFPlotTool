@@ -55,7 +55,7 @@ CURRENT_VERSION_NOTES = (
     "V0.0.10: merge all CSVs in SPC date folders, add SPC multi-date single-antenna overlay preview, "
     "add fullscreen image preview, improve natural antenna sorting, and add clickable current-version release notes."
 )
-DEFAULT_UPDATE_MANIFEST_URL = "https://Andrew9896.github.io/RFPlotTool/version.json"
+DEFAULT_UPDATE_MANIFEST_URL = "https://gitee.com/andrewstephy/rfplot-tool/raw/main/docs/version.json"
 UPDATE_MANIFEST_URL = os.environ.get("RF_PLOT_TOOL_UPDATE_URL", DEFAULT_UPDATE_MANIFEST_URL).strip()
 UPDATER_EXE_NAME = "updater.exe"
 UPDATE_TIMEOUT_SECONDS = 20

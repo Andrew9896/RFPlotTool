@@ -1069,6 +1069,12 @@ class RfPlotUiTests(unittest.TestCase):
         self.assertIn("V0.0.7", defaults["current_version_notes"])
         self.assertIn("V0.0.9", defaults["current_version_notes"])
 
+    def test_default_update_manifest_url_uses_gitee_manifest(self) -> None:
+        self.assertEqual(
+            rf_plot_ui.DEFAULT_UPDATE_MANIFEST_URL,
+            "https://gitee.com/andrewstephy/rfplot-tool/raw/main/docs/version.json",
+        )
+
     def test_webui_has_clickable_current_version_notes(self) -> None:
         html = Path("webui.html").read_text(encoding="utf-8")
         self.assertIn('id="app_version"', html)
