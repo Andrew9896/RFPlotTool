@@ -1,15 +1,14 @@
 {
-    "version":  "0.0.9",
-    "app_version":  "0.0.9",
-    "display_version":  "V0.0.9",
+    "version":  "0.0.10",
+    "app_version":  "0.0.10",
+    "display_version":  "V0.0.10",
     "epoch":  1,
-    "url":  "https://gitee.com/andrewstephy/rfplot-tool/releases/download/v0.0.9/RFPlotTool.exe",
+    "url":  "https://gitee.com/andrewstephy/rfplot-tool/releases/download/v0.0.10/RFPlotTool-v0.0.10.exe",
     "mirrors":  [
-                    "https://github.com/Andrew9896/RFPlotTool/releases/download/v0.0.9/RFPlotTool.exe"
                 ],
-    "sha256":  "b4ac8f9e685d08ec3f5dbff4ce08bae8654854d44cb91ec5328fd665aa242edc",
-    "size":  45183205,
+    "sha256":  "9a114fa12a8c2dcba3b6372395d6f2f5c12e2d4f33ae262c265d4b91667e5ff6",
+    "size":  56438138,
     "mandatory":  false,
-    "published_at":  "2026-06-22T16:01:00+08:00",
-    "notes":  "V0.0.7: improved large CSV scanning, selected-antenna parsing, tab-delimited CSV support, and faster batch chart rendering.\nV0.0.8: add SPC mode support.\nV0.0.9: add View All support and keyboard arrow navigation for image preview."
+    "published_at":  "2026-06-24T20:47:16+08:00",
+    "notes":  "V0.0.7: improved large CSV scanning, selected-antenna parsing, tab-delimited CSV support, and faster batch chart rendering.\nV0.0.8: add SPC mode support.\nV0.0.9: add View All support and keyboard arrow navigation for image preview.\nV0.0.10: merge all CSVs in SPC date folders, add SPC multi-date single-antenna overlay preview, add fullscreen image preview, improve natural antenna sorting, and add clickable current-version release notes."
 }
