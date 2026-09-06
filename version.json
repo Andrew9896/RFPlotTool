@@ -1,14 +1,13 @@
 {
-    "version":  "0.0.10",
-    "app_version":  "0.0.10",
-    "display_version":  "V0.0.10",
-    "epoch":  1,
-    "url":  "https://gitee.com/andrewstephy/rfplot-tool/releases/download/v0.0.10/RFPlotTool-v0.0.10.exe",
-    "mirrors":  [
-                ],
-    "sha256":  "9a114fa12a8c2dcba3b6372395d6f2f5c12e2d4f33ae262c265d4b91667e5ff6",
-    "size":  56438138,
-    "mandatory":  false,
-    "published_at":  "2026-06-24T20:47:16+08:00",
-    "notes":  "V0.0.7: improved large CSV scanning, selected-antenna parsing, tab-delimited CSV support, and faster batch chart rendering.\nV0.0.8: add SPC mode support.\nV0.0.9: add View All support and keyboard arrow navigation for image preview.\nV0.0.10: merge all CSVs in SPC date folders, add SPC multi-date single-antenna overlay preview, add fullscreen image preview, improve natural antenna sorting, and add clickable current-version release notes."
+  "version": "0.0.14",
+  "app_version": "0.0.14",
+  "display_version": "V0.0.14",
+  "epoch": 1,
+  "url": "https://gitee.com/andrewstephy/rfplot-tool/releases/download/v0.0.14/RFPlotTool-v0.0.14.exe",
+  "mirrors": [],
+  "sha256": "5302fcec24f794f9634be37d8282b5edb8a820a599ae35b555c04495bebdeafb",
+  "size": 56447578,
+  "mandatory": false,
+  "published_at": "2026-09-06T09:30:27+08:00",
+  "notes": "V0.0.7: improved large CSV scanning, selected-antenna parsing, tab-delimited CSV support, and faster batch chart rendering.\nV0.0.8: add SPC mode support.\nV0.0.9: add View All support and keyboard arrow navigation for image preview.\nV0.0.10: merge all CSVs in SPC date folders, add SPC multi-date single-antenna overlay preview, add fullscreen image preview, improve natural antenna sorting, and add clickable current-version release notes.\nV0.0.11: add SPC Holder split-detail switch, support L/R summary grouping, and preserve exact Holder ID labels when detail is enabled.\nV0.0.12: remove average preview traces, keep SPC group labels in the legend, and align highlighted sample line width with standard traces.\nV0.0.13: add strict Overall Result PASS/FAIL/ALL filtering across all modes, and show per-group legend counts as N=xx.\nV0.0.14: support ANT-leading S-parameter CSV columns (e.g. ANT1_S32:IL(S21_IL)Band:b1:10.000M Mag) and Resonance range columns, color individual traces PASS/FAIL from the Failing Bands column, and add an intranet edition with online update disabled."
 }
